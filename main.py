@@ -5,8 +5,8 @@ import tempfile
 import shutil
 import subprocess
 import json
-from urllib.parse import urlparse
 import re
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -586,7 +586,6 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Remove bot mention if present (for group chats)
     text = original_text
     if update.message.chat.type in ['group', 'supergroup']:
-        import re
         text = re.sub(r'@\w+', '', text).strip()
     
     # Extract URL from text
