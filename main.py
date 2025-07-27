@@ -594,12 +594,6 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         urls = re.findall(url_pattern, original_text)
         if urls:
             url = urls[0]
-        else:
-            # No URL found at all - ignore this message silently
-            # Only respond if it looks like they're trying to send a URL
-            if any(word in text.lower() for word in ['http', 'www.', '.com', '.org', '.net', 'youtube', 'instagram', 'soundcloud', 'twitter', 'tiktok']):
-                await update.message.reply_text("❌ Please send a valid URL starting with http:// or https://")
-            return
     
     logger.info(f"Received URL: {url}")
     
