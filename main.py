@@ -3,6 +3,8 @@ import asyncio
 import logging
 import tempfile
 import shutil
+import subprocess
+import json
 from urllib.parse import urlparse
 import re
 from dotenv import load_dotenv
@@ -113,12 +115,144 @@ class MediaDownloaderBot:
         except:
             return "Unknown"
     
-    async def download_media(self, url, format_type='best'):
-        """Download media using yt-dlp with enhanced support for all platforms"""
+    async def download_via_subprocess(self, url, format_type, platform_name):
+        """Download using direct yt-dlp subprocess call"""
         temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
         
         try:
-            # Base yt-dlp options
+            # Build the yt-dlp command
+            cmd = ['yt-dlp']
+            
+            # Add cookies if available
+            cookies_file = os.getenv('YTDLP_COOKIES')
+            cookies_browser = os.getenv('YTDLP_COOKIES_BROWSER')
+            
+            if cookies_file and os.path.exists(cookies_file):
+                cmd.extend(['--cookies', cookies_file])
+                logger.info(f"✅ Using cookies from file: {cookies_file}")
+            elif cookies_browser:
+                cmd.extend(['--cookies-from-browser', cookies_browser])
+                logger.info(f"✅ Using cookies from browser: {cookies_browser}")
+            else:
+                logger.warning("⚠️ No cookies configured")
+            
+            # Set format based on user choice and platform
+            if format_type == 'audio':
+                cmd.extend([
+                    '--extract-audio',
+                    '--audio-format', 'mp3',
+                    '--audio-quality', '192K'
+                ])
+            else:
+                # Video format - platform specific
+                if 'youtube' in platform_name.lower():
+                    cmd.extend(['--format', 'best[height<=720]/best'])
+                elif 'instagram' in platform_name.lower():
+                    cmd.extend(['--format', 'best[height<=1080]/best'])
+                else:
+                    cmd.extend(['--format', 'best'])
+            
+            # Output template
+            output_template = os.path.join(temp_dir, '%(title)s.%(ext)s')
+            cmd.extend(['--output', output_template])
+            
+            # Additional options
+            cmd.extend([
+                '--no-playlist',
+                '--retries', '3',
+                '--fragment-retries', '3',
+                '--user-agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            ])
+            
+            # Platform-specific options
+            if 'instagram' in platform_name.lower():
+                cmd.extend([
+                    '--sleep-interval', '2',
+                    '--max-sleep-interval', '5'
+                ])
+            elif 'youtube' in platform_name.lower():
+                cmd.extend([
+                    '--sleep-interval', '1',
+                    '--max-sleep-interval', '3'
+                ])
+            
+            # Add the URL
+            cmd.append(url)
+            
+            logger.info(f"🚀 Running yt-dlp for {platform_name}: {url}")
+            
+            # Run the command
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minute timeout
+                cwd=temp_dir
+            )
+            
+            if result.returncode == 0:
+                # Success! Find the downloaded file
+                files = os.listdir(temp_dir)
+                if files:
+                    filepath = os.path.join(temp_dir, files[0])
+                    
+                    # Check file size
+                    file_size = os.path.getsize(filepath)
+                    max_size_mb = MAX_FILE_SIZE // (1024 * 1024)
+                    if file_size > MAX_FILE_SIZE:
+                        return None, f"❌ File too large ({file_size // (1024*1024)}MB). Telegram limit is {max_size_mb}MB."
+                    
+                    logger.info(f"✅ {platform_name} download success: {os.path.basename(filepath)}")
+                    return filepath, None
+                else:
+                    return None, "❌ Download completed but no file found"
+            else:
+                # Command failed
+                error_output = result.stderr.strip()
+                logger.error(f"❌ yt-dlp failed for {platform_name}: {error_output}")
+                
+                # Parse common errors for user-friendly messages
+                if 'sign in' in error_output.lower() or 'bot' in error_output.lower():
+                    return None, f"❌ {platform_name} detected automation. Try:\n• Different content\n• Wait 10-15 minutes\n• Public content works better"
+                elif 'unavailable' in error_output.lower():
+                    return None, "❌ Content unavailable. May be private, removed, or region-blocked."
+                elif 'age' in error_output.lower() and 'restrict' in error_output.lower():
+                    return None, "❌ Age-restricted content cannot be downloaded."
+                elif 'private' in error_output.lower():
+                    return None, "❌ This is private content."
+                elif 'members-only' in error_output.lower():
+                    return None, "❌ This is members-only content."
+                elif 'login' in error_output.lower():
+                    return None, f"❌ {platform_name} requires login. Content may be private."
+                else:
+                    return None, f"❌ {platform_name} download failed: {error_output[:100]}..."
+        
+        except subprocess.TimeoutExpired:
+            return None, "❌ Download timed out (5 minutes). Content may be too large."
+        except FileNotFoundError:
+            return None, "❌ yt-dlp not found. Please install: pip install yt-dlp"
+        except Exception as e:
+            logger.error(f"❌ Subprocess error for {platform_name}: {e}")
+            return None, f"❌ Error running yt-dlp: {str(e)}"
+        
+        finally:
+            # Cleanup handled by calling function
+            pass
+    
+    async def download_media(self, url, format_type='best'):
+        """Download media - use subprocess for YouTube/Instagram, yt-dlp for others"""
+        platform_name = self.get_platform_name(url)
+        
+        # Use subprocess for YouTube and Instagram
+        if any(platform in url.lower() for platform in ['youtube.com', 'youtu.be', 'instagram.com']):
+            logger.info(f"📱 {platform_name} detected - using direct yt-dlp subprocess")
+            return await self.download_via_subprocess(url, format_type, platform_name)
+        
+        # Use yt-dlp library for other platforms
+        temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
+        
+        try:
+            # Base yt-dlp options for other platforms
             base_opts = {
                 'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
                 'format': format_type,
@@ -135,122 +269,9 @@ class MediaDownloaderBot:
                 'ignoreerrors': False,
             }
             
-            # Platform-specific strategies
             strategies = []
             
-            if 'youtube.com' in url or 'youtu.be' in url:
-                # YouTube Strategy 1: Cookie-based authentication with enhanced headers
-                strategy1 = base_opts.copy()
-                strategy1.update({
-                    'format': 'best[height<=720]/best' if format_type == 'video' else 'bestaudio[ext=m4a]/bestaudio/best',
-                    'http_headers': {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                        'Accept-Language': 'en-us,en;q=0.5',
-                        'Accept-Encoding': 'gzip,deflate',
-                        'DNT': '1',
-                        'Connection': 'keep-alive',
-                        'Upgrade-Insecure-Requests': '1',
-                    },
-                    'extractor_args': {
-                        'youtube': {
-                            'skip': ['hls'],
-                            'player_skip': ['configs'],
-                            'player_client': ['android', 'web'],
-                        }
-                    }
-                })
-                
-                # YouTube Strategy 2: Android client simulation
-                strategy2 = base_opts.copy()
-                strategy2.update({
-                    'format': 'best[height<=480]/best' if format_type == 'video' else 'bestaudio/best',
-                    'http_headers': {
-                        'User-Agent': 'com.google.android.youtube/17.36.4 (Linux; U; Android 12; GB) gzip',
-                        'X-YouTube-Client-Name': '3',
-                        'X-YouTube-Client-Version': '17.36.4',
-                    },
-                    'extractor_args': {
-                        'youtube': {
-                            'player_client': ['android'],
-                            'skip': ['dash', 'hls'],
-                        }
-                    }
-                })
-                
-                # YouTube Strategy 3: iOS client simulation
-                strategy3 = base_opts.copy()
-                strategy3.update({
-                    'format': 'best[height<=480]/best' if format_type == 'video' else 'bestaudio/best',
-                    'http_headers': {
-                        'User-Agent': 'com.google.ios.youtube/17.36.4 (iPhone14,3; U; CPU iOS 15_6 like Mac OS X)',
-                        'X-YouTube-Client-Name': '5',
-                        'X-YouTube-Client-Version': '17.36.4',
-                    },
-                    'extractor_args': {
-                        'youtube': {
-                            'player_client': ['ios'],
-                            'skip': ['dash'],
-                        }
-                    }
-                })
-                
-                # YouTube Strategy 4: Googlebot simulation
-                strategy4 = base_opts.copy()
-                strategy4.update({
-                    'format': 'best[height<=720]/best' if format_type == 'video' else 'bestaudio/best',
-                    'http_headers': {
-                        'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)',
-                        'Accept': '*/*',
-                    },
-                    'extractor_args': {
-                        'youtube': {
-                            'player_client': ['web'],
-                            'skip': ['hls'],
-                        }
-                    },
-                    'age_limit': 999,
-                })
-                
-                # YouTube Strategy 5: Alternative extraction with delays
-                strategy5 = base_opts.copy()
-                strategy5.update({
-                    'format': 'worst[height>=240]/worst' if format_type == 'video' else 'worst',
-                    'http_headers': {
-                        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                        'Accept-Language': 'en-US,en;q=0.5',
-                        'Cache-Control': 'no-cache',
-                        'Pragma': 'no-cache',
-                    },
-                    'extractor_args': {
-                        'youtube': {
-                            'player_client': ['web', 'android'],
-                            'player_skip': ['webpage'],
-                        }
-                    },
-                    'sleep_interval': 1,
-                    'max_sleep_interval': 3,
-                })
-                
-                # Add cookies to all YouTube strategies if available
-                cookies_file = os.getenv('YTDLP_COOKIES')
-                cookies_browser = os.getenv('YTDLP_COOKIES_BROWSER')
-                
-                if cookies_file and os.path.exists(cookies_file):
-                    for strategy in [strategy1, strategy2, strategy3, strategy4, strategy5]:
-                        strategy['cookiefile'] = cookies_file
-                    logger.info(f"✅ Using cookies from file: {cookies_file}")
-                elif cookies_browser:
-                    for strategy in [strategy1, strategy2, strategy3, strategy4, strategy5]:
-                        strategy['cookiesfrombrowser'] = (cookies_browser,)
-                    logger.info(f"✅ Using cookies from {cookies_browser} browser")
-                else:
-                    logger.warning("⚠️ No cookies configured - YouTube downloads may fail")
-                
-                strategies.extend([strategy1, strategy2, strategy3, strategy4, strategy5])
-                
-            elif 'twitter.com' in url or 'x.com' in url:
+            if 'twitter.com' in url or 'x.com' in url:
                 # Twitter Strategy 1: Legacy API
                 strategy1 = base_opts.copy()
                 strategy1.update({
@@ -289,39 +310,8 @@ class MediaDownloaderBot:
                 })
                 strategies.append(strategy2)
                 
-            elif 'instagram.com' in url:
-                # Instagram Strategy 1: Mobile browser simulation
-                strategy1 = base_opts.copy()
-                strategy1.update({
-                    'format': 'best[height<=1080]',
-                    'http_headers': {
-                        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                        'Accept-Language': 'en-US,en;q=0.9',
-                        'Accept-Encoding': 'gzip, deflate, br',
-                        'DNT': '1',
-                        'Connection': 'keep-alive',
-                        'Upgrade-Insecure-Requests': '1',
-                    },
-                    'sleep_interval': 2,
-                    'max_sleep_interval': 8,
-                })
-                strategies.append(strategy1)
-                
-                # Instagram Strategy 2: Android app simulation
-                strategy2 = base_opts.copy()
-                strategy2.update({
-                    'format': 'best',
-                    'http_headers': {
-                        'User-Agent': 'Instagram 302.0.0.23.113 Android (33/13; 420dpi; 1080x2340; samsung; SM-G991B; o1s; exynos2100; en_US; 314665256)',
-                        'X-IG-App-ID': '124024574287414',
-                    },
-                    'sleep_interval': 3,
-                })
-                strategies.append(strategy2)
-                
             else:
-                # Default strategy for other platforms
+                # Default strategy for other platforms (SoundCloud, TikTok, etc.)
                 strategy = base_opts.copy()
                 strategy.update({
                     'http_headers': {
@@ -340,6 +330,10 @@ class MediaDownloaderBot:
                         }]
                 elif 'tiktok.com' in url:
                     strategy['format'] = 'best[height<=720]'
+                elif 'facebook.com' in url:
+                    strategy['format'] = 'best[height<=720]'
+                elif 'vimeo.com' in url:
+                    strategy['format'] = 'best[height<=1080]'
                 
                 strategies.append(strategy)
             
@@ -347,7 +341,7 @@ class MediaDownloaderBot:
             last_error = None
             for i, strategy in enumerate(strategies):
                 try:
-                    logger.info(f"Trying download strategy {i+1}/{len(strategies)}")
+                    logger.info(f"Trying {platform_name} strategy {i+1}/{len(strategies)}")
                     
                     # Handle URL conversion for Twitter
                     current_url = url
@@ -365,19 +359,14 @@ class MediaDownloaderBot:
                             # Handle specific errors
                             if any(keyword in error_msg for keyword in ['sign in', 'bot', 'automated']):
                                 if i < len(strategies) - 1:
-                                    logger.info(f"Bot detection on strategy {i+1}, trying next strategy...")
                                     continue
-                                return None, "❌ Platform detected automated access. Try a different video or wait 10-15 minutes."
+                                return None, f"❌ {platform_name} detected automated access. Try different content."
                             elif any(keyword in error_msg for keyword in ['private', 'unavailable', 'not found']):
                                 if i < len(strategies) - 1:
                                     continue
-                                return None, "❌ This content is private, unavailable, or was removed."
+                                return None, "❌ Content is private, unavailable, or was removed."
                             elif any(keyword in error_msg for keyword in ['age', 'restricted']):
-                                return None, "❌ This content is age-restricted and cannot be downloaded."
-                            elif any(keyword in error_msg for keyword in ['login required', 'rate-limit', 'rate limit']):
-                                if i < len(strategies) - 1:
-                                    continue
-                                return None, "❌ Login required or rate-limited. This content may be private or restricted."
+                                return None, "❌ Age-restricted content cannot be downloaded."
                             else:
                                 if i < len(strategies) - 1:
                                     continue
@@ -400,7 +389,7 @@ class MediaDownloaderBot:
                             files = os.listdir(temp_dir)
                             if files:
                                 filepath = os.path.join(temp_dir, files[0])
-                                logger.info(f"✅ Successfully downloaded with strategy {i+1}")
+                                logger.info(f"✅ {platform_name} download success with strategy {i+1}")
                                 return filepath, None
                             else:
                                 if i < len(strategies) - 1:
@@ -412,20 +401,9 @@ class MediaDownloaderBot:
                             last_error = str(e)
                             logger.warning(f"Strategy {i+1} failed during download: {e}")
                             
-                            if any(keyword in error_msg for keyword in ['sign in', 'bot', 'automated']):
-                                if i < len(strategies) - 1:
-                                    continue
-                                return None, "❌ Platform detected automated access. Try again later."
-                            elif 'http error 403' in error_msg:
-                                if i < len(strategies) - 1:
-                                    continue
-                                return None, "❌ Access forbidden. Content may be region-restricted."
-                            elif 'http error 404' in error_msg:
-                                return None, "❌ Content not found. The link may be broken or removed."
-                            else:
-                                if i < len(strategies) - 1:
-                                    continue
-                                return None, f"❌ Download failed: {str(e)[:100]}..."
+                            if i < len(strategies) - 1:
+                                continue
+                            return None, f"❌ Download failed: {str(e)[:100]}..."
                 
                 except Exception as e:
                     last_error = str(e)
@@ -435,14 +413,7 @@ class MediaDownloaderBot:
                     break
             
             # All strategies failed
-            if last_error:
-                error_msg = str(last_error).lower()
-                if any(keyword in error_msg for keyword in ['sign in', 'bot', 'automated']):
-                    return None, "❌ Platform detected automated access. All bypass attempts failed."
-                else:
-                    return None, f"❌ All download strategies failed. Last error: {str(last_error)[:100]}..."
-            else:
-                return None, "❌ All download strategies failed for unknown reasons."
+            return None, f"❌ All {platform_name} strategies failed. Last error: {str(last_error)[:100] if last_error else 'Unknown'}..."
         
         except Exception as e:
             logger.error(f"Unexpected error in download_media: {e}")
@@ -488,8 +459,7 @@ async def create_join_keyboard(not_joined_channels: list) -> InlineKeyboardMarku
             channel_name = channel[1:]  # Remove @ symbol
             url = f"https://t.me/{channel_name}"
         elif channel.startswith('-100'):
-            # For channel IDs, you need to provide the channel username manually
-            url = f"https://t.me/joinchat/{channel[4:]}"  # This might not work for all cases
+            url = f"https://t.me/joinchat/{channel[4:]}"
         else:
             url = f"https://t.me/{channel}"
         
@@ -547,13 +517,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Send me a URL from any of these platforms and I'll download it for you:
 
 📱 <b>Supported Platforms:</b>
-• YouTube (videos & audio)
-• Twitter/X (videos)
-• Instagram (posts & stories)
-• TikTok (videos)
-• SoundCloud (audio)
-• Facebook (videos)
-• Vimeo (videos)
+• YouTube (videos & audio) 🎵
+• Instagram (posts & stories) 📸
+• Twitter/X (videos) 🐦
+• TikTok (videos) 📱
+• SoundCloud (audio) 🎧
+• Facebook (videos) 📘
+• Vimeo (videos) 🎥
 
 📝 <b>How to use:</b>
 1. Send me a URL
@@ -561,6 +531,8 @@ Send me a URL from any of these platforms and I'll download it for you:
 3. I'll download and send it to you!
 
 ⚠️ <b>Note:</b> Files must be under {max_size_mb}MB due to Telegram limits.
+
+🚀 <b>Enhanced:</b> YouTube & Instagram use optimized downloading for better success rates!
     """
     
     await update.message.reply_text(welcome_text, parse_mode='HTML')
@@ -585,7 +557,6 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Remove bot mention if present (for group chats)
     text = original_text
     if update.message.chat.type in ['group', 'supergroup']:
-        # Remove @botname mentions
         import re
         text = re.sub(r'@\w+', '', text).strip()
     
@@ -634,24 +605,45 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Store URL with short ID for callback data
     url_id = bot.store_url(url, user_id)
     
-    # For SoundCloud, only show audio option
+    # Platform-specific format options
     if 'soundcloud.com' in url.lower():
+        # SoundCloud - only audio
         keyboard = [
             [InlineKeyboardButton("🎵 Download Audio", callback_data=f"audio|{url_id}")]
         ]
+        format_text = "Choose download format:"
+    elif any(platform in url.lower() for platform in ['youtube.com', 'youtu.be']):
+        # YouTube - enhanced with subprocess
+        keyboard = [
+            [
+                InlineKeyboardButton("🎥 Video (Enhanced)", callback_data=f"video|{url_id}"),
+                InlineKeyboardButton("🎵 Audio (Enhanced)", callback_data=f"audio|{url_id}")
+            ]
+        ]
+        format_text = "Choose download format (Enhanced for better success):"
+    elif 'instagram.com' in url.lower():
+        # Instagram - enhanced with subprocess
+        keyboard = [
+            [
+                InlineKeyboardButton("🎥 Video (Enhanced)", callback_data=f"video|{url_id}"),
+                InlineKeyboardButton("🎵 Audio (Enhanced)", callback_data=f"audio|{url_id}")
+            ]
+        ]
+        format_text = "Choose download format (Enhanced for better success):"
     else:
-        # Create format selection keyboard for other platforms
+        # Other platforms - standard options
         keyboard = [
             [
                 InlineKeyboardButton("🎥 Video", callback_data=f"video|{url_id}"),
                 InlineKeyboardButton("🎵 Audio", callback_data=f"audio|{url_id}")
             ]
         ]
+        format_text = "Choose download format:"
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        f"📱 Detected: {platform}\n\nChoose download format:",
+        f"📱 Detected: {platform}\n\n{format_text}",
         reply_markup=reply_markup
     )
 
@@ -676,13 +668,13 @@ async def handle_membership_check(update: Update, context: ContextTypes.DEFAULT_
 Send me a URL from any of these platforms and I'll download it for you:
 
 📱 <b>Supported Platforms:</b>
-• YouTube (videos & audio)
-• Twitter/X (videos)  
-• Instagram (posts & stories)
-• TikTok (videos)
-• SoundCloud (audio)
-• Facebook (videos)
-• Vimeo (videos)
+• YouTube (videos & audio) 🎵
+• Instagram (posts & stories) 📸  
+• Twitter/X (videos) 🐦
+• TikTok (videos) 📱
+• SoundCloud (audio) 🎧
+• Facebook (videos) 📘
+• Vimeo (videos) 🎥
 
 📝 <b>How to use:</b>
 1. Send me a URL
@@ -742,12 +734,16 @@ async def handle_format_selection(update: Update, context: ContextTypes.DEFAULT_
     
     platform = bot.get_platform_name(url)
     
-    # Show downloading message
+    # Show downloading message with platform-specific info
     format_emoji = "🎥" if format_type == "video" else "🎵"
-    await query.edit_message_text(
-        f"{format_emoji} Downloading {format_type} from {platform}...\n\n"
-        f"⏳ This may take a moment depending on file size."
-    )
+    enhanced_platforms = ['YouTube', 'Instagram']
+    
+    if platform in enhanced_platforms:
+        download_msg = f"{format_emoji} Downloading {format_type} from {platform} (Enhanced)...\n\n⏳ Using optimized method for better success rate."
+    else:
+        download_msg = f"{format_emoji} Downloading {format_type} from {platform}...\n\n⏳ This may take a moment depending on file size."
+    
+    await query.edit_message_text(download_msg)
     
     # Download the media
     try:
@@ -757,16 +753,22 @@ async def handle_format_selection(update: Update, context: ContextTypes.DEFAULT_
             error_text = f"❌ {error}"
             
             # Add helpful suggestions for common errors
-            if "YouTube detected automated access" in error or "bot detection" in error.lower():
-                error_text += "\n\n💡 Suggestions:\n"
-                error_text += "• Try a different YouTube video\n"
-                error_text += "• Wait 10-15 minutes before trying again\n"
-                error_text += "• Use shorter videos (under 5 minutes)\n"
-                error_text += "• Educational content works better"
+            if "detected automation" in error.lower() or "bot detection" in error.lower():
+                if platform in enhanced_platforms:
+                    error_text += "\n\n💡 Enhanced method tried but failed. Suggestions:\n"
+                    error_text += "• Try different content from the same platform\n"
+                    error_text += "• Wait 10-15 minutes before trying again\n"
+                    error_text += "• Public content works better than private/restricted"
+                else:
+                    error_text += "\n\n💡 Suggestions:\n"
+                    error_text += "• Try different content\n"
+                    error_text += "• Wait 10-15 minutes before trying again"
             elif "private" in error.lower() or "unavailable" in error.lower():
-                error_text += "\n\n💡 Try: Make sure the video is public and available in your region"
+                error_text += "\n\n💡 Try: Make sure the content is public and available in your region"
             elif "age-restricted" in error.lower():
                 error_text += "\n\n💡 Note: Age-restricted content cannot be downloaded"
+            elif "timed out" in error.lower():
+                error_text += "\n\n💡 Try: Content might be too large. Try shorter videos or audio format"
             
             await query.edit_message_text(error_text)
             return
@@ -783,24 +785,37 @@ async def handle_format_selection(update: Update, context: ContextTypes.DEFAULT_
             return
         
         # Send the file
-        await query.edit_message_text(f"📤 Uploading {format_type}...")
+        success_msg = f"📤 Uploading {format_type}..."
+        if platform in enhanced_platforms:
+            success_msg += " (Enhanced method succeeded!)"
+        
+        await query.edit_message_text(success_msg)
+        
+        # Prepare caption
+        caption = f"🎵 Downloaded from {platform}" if format_type == 'audio' else f"🎥 Downloaded from {platform}"
+        if platform in enhanced_platforms:
+            caption += " (Enhanced)"
         
         with open(filepath, 'rb') as file:
             if format_type == 'audio':
                 await context.bot.send_audio(
                     chat_id=query.message.chat_id,
                     audio=file,
-                    caption=f"🎵 Downloaded from {platform}"
+                    caption=caption
                 )
             else:
                 await context.bot.send_video(
                     chat_id=query.message.chat_id,
                     video=file,
-                    caption=f"🎥 Downloaded from {platform}",
+                    caption=caption,
                     supports_streaming=True
                 )
         
-        await query.edit_message_text(f"✅ {format_type.title()} downloaded successfully!")
+        final_msg = f"✅ {format_type.title()} downloaded successfully!"
+        if platform in enhanced_platforms:
+            final_msg += f"\n🚀 Enhanced method used for {platform}"
+        
+        await query.edit_message_text(final_msg)
         
     except Exception as e:
         logger.error(f"Error in download process: {e}")
@@ -836,13 +851,16 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 4. Wait for download and upload
 
 📱 Supported Platforms:
-• YouTube - Videos and audio
-• Twitter/X - Videos and GIFs
-• Instagram - Posts and stories
-• TikTok - Videos
-• SoundCloud - Audio tracks
-• Facebook - Videos
-• Vimeo - Videos
+• YouTube - Videos and audio 🎵 (Enhanced)
+• Instagram - Posts and stories 📸 (Enhanced)
+• Twitter/X - Videos and GIFs 🐦
+• TikTok - Videos 📱
+• SoundCloud - Audio tracks 🎧
+• Facebook - Videos 📘
+• Vimeo - Videos 🎥
+
+🚀 Enhanced Platforms:
+YouTube and Instagram use optimized downloading with direct yt-dlp subprocess calls for better success rates and cookie support.
 
 ⚠️ Limitations:
 • Maximum file size: {max_size_mb}MB
@@ -850,10 +868,14 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • Some private or age-restricted content may not work
 
 💡 Tips:
-• For YouTube, you can use both youtube.com and youtu.be links
-• Instagram stories require the full URL
-• Some platforms may have regional restrictions
-• Educational content works better than viral videos
+• Enhanced platforms (YouTube, Instagram) have higher success rates
+• Public content works better than private
+• Educational content typically works better than viral content
+• If download fails, try waiting 10-15 minutes and retry
+• Different content from the same platform may work better
+
+🍪 Cookie Support:
+The bot supports YouTube cookies for better access to content. Cookies are automatically used when configured.
     """
     
     await update.message.reply_text(help_text)
@@ -864,16 +886,34 @@ def main():
         logger.error("❌ Bot token not configured!")
         return
     
-    logger.info("🤖 Initializing Telegram Media Downloader Bot...")
+    logger.info("🤖 Initializing Enhanced Media Downloader Bot...")
     logger.info(f"📁 Download directory: {DOWNLOAD_DIR}")
     logger.info(f"📏 Max file size: {MAX_FILE_SIZE // (1024*1024)}MB")
     
     # Check cookie configuration
     cookies_file = os.getenv('YTDLP_COOKIES')
+    cookies_browser = os.getenv('YTDLP_COOKIES_BROWSER')
+    
     if cookies_file and os.path.exists(cookies_file):
         logger.info(f"🍪 YouTube cookies configured: {cookies_file}")
+    elif cookies_browser:
+        logger.info(f"🍪 Browser cookies configured: {cookies_browser}")
     else:
-        logger.warning("⚠️ No YouTube cookies configured - downloads may fail")
+        logger.warning("⚠️ No YouTube cookies configured - some downloads may fail")
+    
+    # Check if yt-dlp is available
+    try:
+        result = subprocess.run(['yt-dlp', '--version'], capture_output=True, text=True, timeout=10)
+        if result.returncode == 0:
+            version = result.stdout.strip()
+            logger.info(f"✅ yt-dlp available: {version}")
+        else:
+            logger.warning("⚠️ yt-dlp command failed")
+    except FileNotFoundError:
+        logger.error("❌ yt-dlp not found! Install with: pip install yt-dlp")
+        return
+    except Exception as e:
+        logger.warning(f"⚠️ Could not check yt-dlp: {e}")
     
     # Create the Application
     application = Application.builder().token(BOT_TOKEN).build()
@@ -885,8 +925,9 @@ def main():
     application.add_handler(CallbackQueryHandler(handle_format_selection))
     
     # Run the bot until the user presses Ctrl-C
-    logger.info("🚀 Bot is running! Send /start to begin.")
-    logger.info("📱 Ready to download media from supported platforms!")
+    logger.info("🚀 Enhanced Bot is running! Send /start to begin.")
+    logger.info("📱 Ready to download media with enhanced YouTube & Instagram support!")
+    logger.info("🎯 Enhanced platforms: YouTube, Instagram (using direct yt-dlp subprocess)")
     
     try:
         application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
