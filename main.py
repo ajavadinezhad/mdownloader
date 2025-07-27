@@ -51,7 +51,7 @@ class MediaDownloaderBot:
             #'youtu.be': 'YouTube',
             'twitter.com': 'Twitter/X',
             'x.com': 'Twitter/X',
-            'instagram.com': 'Instagram',
+            #'instagram.com': 'Instagram',
             'soundcloud.com': 'SoundCloud',
             #'tiktok.com': 'TikTok',
             #'facebook.com': 'Facebook',
@@ -868,9 +868,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • Instagram - Posts, Reels, Images 📸
 • SoundCloud - Audio tracks 🎧
 
-🚀 Enhanced Platforms:
-• YouTube uses optimized downloading with direct yt-dlp subprocess calls for better success rates and cookie support
-• Instagram uses instaloader library for reliable access to posts and reels
 
 ⚠️ Limitations:
 • Maximum file size: {max_size_mb}MB
@@ -878,8 +875,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 • Some private or age-restricted content may not work
 
 💡 Tips:
-• YouTube has enhanced success rates with subprocess method
-• Instagram uses instaloader for better reliability and no browser requirements
 • Public content works better than private
 • Educational content typically works better than viral content
 • If download fails, try waiting 10-15 minutes and retry
