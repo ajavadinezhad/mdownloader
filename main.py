@@ -33,9 +33,6 @@ BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
 DOWNLOAD_DIR = os.getenv('DOWNLOAD_DIR', './downloads')
 MAX_FILE_SIZE = int(os.getenv('MAX_FILE_SIZE', '50')) * 1024 * 1024  # Convert MB to bytes
 
-# Channel/Group settings for forced subscription
-REQUIRED_CHANNELS = os.getenv('REQUIRED_CHANNELS', '').split(',') if os.getenv('REQUIRED_CHANNELS') else []
-
 # Validate bot token
 if not BOT_TOKEN:
     logger.error("❌ TELEGRAM_BOT_TOKEN not found in environment variables!")
@@ -455,90 +452,8 @@ class MediaDownloaderBot:
 # Initialize bot
 bot = MediaDownloaderBot()
 
-async def check_user_membership(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> tuple[bool, list]:
-    """Check if user is member of required channels/groups"""
-    if not REQUIRED_CHANNELS:
-        return True, []  # No channels required
-    
-    not_joined = []
-    
-    for channel in REQUIRED_CHANNELS:
-        channel = channel.strip()
-        if not channel:
-            continue
-            
-        try:
-            member = await context.bot.get_chat_member(chat_id=channel, user_id=user_id)
-            if member.status in ['left', 'kicked']:
-                not_joined.append(channel)
-        except Exception as e:
-            logger.warning(f"Could not check membership for {channel}: {e}")
-            # If we can't check, assume not joined for security
-            not_joined.append(channel)
-    
-    return len(not_joined) == 0, not_joined
-
-async def create_join_keyboard(not_joined_channels: list) -> InlineKeyboardMarkup:
-    """Create keyboard with join buttons for required channels"""
-    keyboard = []
-    
-    for channel in not_joined_channels:
-        # Create join button for each channel
-        if channel.startswith('@'):
-            channel_name = channel[1:]  # Remove @ symbol
-            url = f"https://t.me/{channel_name}"
-        elif channel.startswith('-100'):
-            url = f"https://t.me/joinchat/{channel[4:]}"
-        else:
-            url = f"https://t.me/{channel}"
-        
-        keyboard.append([InlineKeyboardButton(f"📢 Join {channel}", url=url)])
-    
-    # Add check membership button
-    keyboard.append([InlineKeyboardButton("✅ Check Membership", callback_data="check_membership")])
-    
-    return InlineKeyboardMarkup(keyboard)
-
-async def membership_required_message(not_joined_channels: list) -> str:
-    """Create membership required message"""
-    message = """
-🔒 **Membership Required**
-
-To use this bot, you must join our channel(s):
-
-"""
-    
-    for channel in not_joined_channels:
-        message += f"📢 {channel}\n"
-    
-    message += """
-**Steps:**
-1. Click the join button(s) below
-2. Join the channel(s)
-3. Click "✅ Check Membership"
-4. Start using the bot!
-
-This helps support our community 🙏
-    """
-    
-    return message
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a message when the command /start is issued."""
-    user_id = update.message.from_user.id
-    
-    # Check if user is member of required channels
-    is_member, not_joined = await check_user_membership(user_id, context)
-    
-    if not is_member:
-        # User needs to join channels first
-        message = await membership_required_message(not_joined)
-        keyboard = await create_join_keyboard(not_joined)
-        
-        await update.message.reply_text(message, reply_markup=keyboard, parse_mode='HTML')
-        return
-    
-    # User is member, show welcome message
     max_size_mb = MAX_FILE_SIZE // (1024*1024)
     welcome_text = f"""
 🎬 <b>Media Downloader Bot</b>
@@ -563,19 +478,6 @@ Send me a URL from any of these platforms and I'll download it for you:
 
 async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle URL messages"""
-    user_id = update.message.from_user.id
-    
-    # Check if user is member of required channels
-    is_member, not_joined = await check_user_membership(user_id, context)
-    
-    if not is_member:
-        # User needs to join channels first
-        message = await membership_required_message(not_joined)
-        keyboard = await create_join_keyboard(not_joined)
-        
-        await update.message.reply_text(message, reply_markup=keyboard, parse_mode='HTML')
-        return
-    
     original_text = update.message.text.strip()
     
     # Remove bot mention if present (for group chats)
@@ -605,7 +507,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"Detected platform: {platform}")
     
     # Store URL with short ID for callback data
-    url_id = bot.store_url(url, user_id)
+    url_id = bot.store_url(url, update.message.from_user.id)
     
     # Platform-specific format options
     if 'soundcloud.com' in url.lower():
@@ -649,72 +551,10 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup
     )
 
-async def handle_membership_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle membership check callback"""
-    query = update.callback_query
-    await query.answer()
-    
-    user_id = query.from_user.id
-    
-    # Check if user is now member of required channels
-    is_member, not_joined = await check_user_membership(user_id, context)
-    
-    if is_member:
-        # User has joined all channels
-        max_size_mb = MAX_FILE_SIZE // (1024*1024)
-        welcome_text = f"""
-✅ <b>Welcome! You're now verified!</b>
-
-🎬 <b>Media Downloader Bot</b>
-
-Send me a URL from any of these platforms and I'll download it for you:
-
-📱 <b>Supported Platforms:</b>
-• Twitter/X (videos) 🐦
-• SoundCloud (audio) 🎧
-
-📝 <b>How to use:</b>
-1. Send me a URL
-2. Choose video or audio format  
-3. I'll download and send it to you!
-
-⚠️ <b>Note:</b> Files must be under {max_size_mb}MB due to Telegram limits.
-        """
-        
-        await query.edit_message_text(welcome_text, parse_mode='HTML')
-    else:
-        # User still hasn't joined all channels
-        message = await membership_required_message(not_joined)
-        keyboard = await create_join_keyboard(not_joined)
-        
-        await query.edit_message_text(
-            message + "\n\n❌ <b>You still need to join the channels above!</b>",
-            reply_markup=keyboard,
-            parse_mode='HTML'
-        )
-
 async def handle_format_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle format selection callback"""
     query = update.callback_query
     await query.answer()
-    
-    # Handle membership check
-    if query.data == "check_membership":
-        await handle_membership_check(update, context)
-        return
-    
-    user_id = query.from_user.id
-    
-    # Check if user is member of required channels
-    is_member, not_joined = await check_user_membership(user_id, context)
-    
-    if not is_member:
-        # User needs to join channels first
-        message = await membership_required_message(not_joined)
-        keyboard = await create_join_keyboard(not_joined)
-        
-        await query.edit_message_text(message, reply_markup=keyboard, parse_mode='HTML')
-        return
     
     data_parts = query.data.split('|', 1)
     if len(data_parts) != 2:
