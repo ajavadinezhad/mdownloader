@@ -57,7 +57,7 @@ class MediaDownloaderBot:
             'soundcloud.com': 'SoundCloud',
             #'tiktok.com': 'TikTok',
             #'facebook.com': 'Facebook',
-            'vimeo.com': 'Vimeo'
+            #'vimeo.com': 'Vimeo'
         }
         # Store URLs temporarily with short IDs
         self.url_cache = {}
@@ -286,9 +286,6 @@ class MediaDownloaderBot:
                         'Upgrade-Insecure-Requests': '1',
                     },
                     'extractor_args': {
-                        'twitter': {
-                            'api': 'legacy',
-                        }
                     }
                 })
                 strategies.append(strategy1)
