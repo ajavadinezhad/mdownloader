@@ -1,4 +1,4 @@
 python-telegram-bot>=20.0
-yt-dlp>=2023.12.30
+yt-dlp>=2024.01.07
 python-dotenv>=1.0.0
 requests>=2.31.0
