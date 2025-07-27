@@ -53,9 +53,9 @@ class MediaDownloaderBot:
             'youtu.be': 'YouTube',
             'twitter.com': 'Twitter/X',
             'x.com': 'Twitter/X',
-            'instagram.com': 'Instagram',
+           # 'instagram.com': 'Instagram',
             'soundcloud.com': 'SoundCloud',
-            'tiktok.com': 'TikTok',
+            #'tiktok.com': 'TikTok',
             'facebook.com': 'Facebook',
             'vimeo.com': 'Vimeo'
         }
