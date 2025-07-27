@@ -68,7 +68,18 @@ class MediaDownloaderBot:
             download_comments=False,
             save_metadata=False,
             compress_json=False,
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            sleep=True,
+            max_connection_attempts=3,
         )
+        # Configure session settings for better reliability
+        self.insta_loader.context._session.headers.update({
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+        })
     
     def is_supported_url(self, url):
         """Check if the URL is from a supported platform"""
