@@ -13,6 +13,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 import yt_dlp
 import requests
+import instaloader
 
 # Load environment variables
 load_dotenv()
@@ -50,7 +51,7 @@ class MediaDownloaderBot:
             #'youtu.be': 'YouTube',
             'twitter.com': 'Twitter/X',
             'x.com': 'Twitter/X',
-            #'instagram.com': 'Instagram',
+            'instagram.com': 'Instagram',
             'soundcloud.com': 'SoundCloud',
             #'tiktok.com': 'TikTok',
             #'facebook.com': 'Facebook',
@@ -58,6 +59,16 @@ class MediaDownloaderBot:
         }
         # Store URLs temporarily with short IDs
         self.url_cache = {}
+        # Initialize instaloader
+        self.insta_loader = instaloader.Instaloader(
+            dirname_pattern='{target}',
+            filename_pattern='{date_utc}_UTC',
+            download_video_thumbnails=False,
+            download_geotags=False,
+            download_comments=False,
+            save_metadata=False,
+            compress_json=False,
+        )
     
     def is_supported_url(self, url):
         """Check if the URL is from a supported platform"""
@@ -112,6 +123,125 @@ class MediaDownloaderBot:
         except:
             return "Unknown"
     
+    async def download_instagram_with_instaloader(self, url, format_type):
+        """Download Instagram content using instaloader"""
+        temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
+        
+        try:
+            # Configure instaloader for this download
+            self.insta_loader.dirname_pattern = temp_dir
+            
+            # Extract shortcode from URL
+            import re
+            shortcode_match = re.search(r'/p/([A-Za-z0-9_-]+)', url) or re.search(r'/reel/([A-Za-z0-9_-]+)', url)
+            if not shortcode_match:
+                return None, "❌ Invalid Instagram URL format"
+            
+            shortcode = shortcode_match.group(1)
+            logger.info(f"📱 Instagram shortcode: {shortcode}")
+            
+            # Download the post
+            try:
+                post = instaloader.Post.from_shortcode(self.insta_loader.context, shortcode)
+                
+                # Check if it's a video or image
+                if post.is_video:
+                    # Download video
+                    video_url = post.video_url
+                    response = requests.get(video_url, stream=True)
+                    response.raise_for_status()
+                    
+                    # Determine file extension
+                    content_type = response.headers.get('content-type', '')
+                    if 'mp4' in content_type:
+                        ext = '.mp4'
+                    else:
+                        ext = '.mp4'  # Default to mp4
+                    
+                    filename = f"instagram_video_{shortcode}{ext}"
+                    filepath = os.path.join(temp_dir, filename)
+                    
+                    # Download video file
+                    with open(filepath, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                    
+                    # Check file size
+                    file_size = os.path.getsize(filepath)
+                    max_size_mb = MAX_FILE_SIZE // (1024 * 1024)
+                    if file_size > MAX_FILE_SIZE:
+                        return None, f"❌ File too large ({file_size // (1024*1024)}MB). Telegram limit is {max_size_mb}MB."
+                    
+                    # If user wants audio, convert it
+                    if format_type == 'audio':
+                        audio_filepath = os.path.join(temp_dir, f"instagram_audio_{shortcode}.mp3")
+                        try:
+                            # Use ffmpeg to extract audio
+                            cmd = ['ffmpeg', '-i', filepath, '-vn', '-acodec', 'mp3', '-ab', '192k', audio_filepath, '-y']
+                            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+                            
+                            if result.returncode == 0 and os.path.exists(audio_filepath):
+                                os.remove(filepath)  # Remove video file
+                                return audio_filepath, None
+                            else:
+                                return None, "❌ Audio extraction failed. ffmpeg may not be installed."
+                        except (FileNotFoundError, subprocess.TimeoutExpired):
+                            return None, "❌ Audio extraction failed. ffmpeg required for audio conversion."
+                    
+                    return filepath, None
+                    
+                else:
+                    # It's an image
+                    if format_type == 'audio':
+                        return None, "❌ This Instagram post contains only images. Audio extraction not possible."
+                    
+                    # Download image
+                    image_url = post.url
+                    response = requests.get(image_url, stream=True)
+                    response.raise_for_status()
+                    
+                    # Determine file extension
+                    content_type = response.headers.get('content-type', '')
+                    if 'jpeg' in content_type or 'jpg' in content_type:
+                        ext = '.jpg'
+                    elif 'png' in content_type:
+                        ext = '.png'
+                    else:
+                        ext = '.jpg'  # Default
+                    
+                    filename = f"instagram_image_{shortcode}{ext}"
+                    filepath = os.path.join(temp_dir, filename)
+                    
+                    with open(filepath, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                    
+                    # Check file size
+                    file_size = os.path.getsize(filepath)
+                    max_size_mb = MAX_FILE_SIZE // (1024 * 1024)
+                    if file_size > MAX_FILE_SIZE:
+                        return None, f"❌ File too large ({file_size // (1024*1024)}MB). Telegram limit is {max_size_mb}MB."
+                    
+                    return filepath, None
+                    
+            except instaloader.exceptions.PostChangedException:
+                return None, "❌ Instagram post was modified or deleted"
+            except instaloader.exceptions.PrivateProfileNotFollowedException:
+                return None, "❌ This is a private Instagram account"
+            except instaloader.exceptions.ProfileNotExistsException:
+                return None, "❌ Instagram profile does not exist"
+            except instaloader.exceptions.LoginRequiredException:
+                return None, "❌ Instagram login required for this content"
+            except requests.exceptions.RequestException as e:
+                return None, f"❌ Network error: {str(e)[:50]}..."
+            except Exception as e:
+                logger.error(f"Instaloader error: {e}")
+                return None, f"❌ Instagram download failed: {str(e)[:100]}..."
+                
+        except Exception as e:
+            logger.error(f"Instagram download error: {e}")
+            return None, f"❌ Instagram error: {str(e)[:100]}..."
+        
     async def download_via_subprocess(self, url, format_type, platform_name):
         """Download using direct yt-dlp subprocess call"""
         temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
@@ -237,11 +367,16 @@ class MediaDownloaderBot:
             pass
     
     async def download_media(self, url, format_type='best'):
-        """Download media - use subprocess for YouTube/Instagram, yt-dlp for others"""
+        """Download media - use instaloader for Instagram, subprocess for YouTube, yt-dlp for others"""
         platform_name = self.get_platform_name(url)
         
-        # Use subprocess for YouTube and Instagram
-        if any(platform in url.lower() for platform in ['youtube.com', 'youtu.be', 'instagram.com']):
+        # Use instaloader for Instagram
+        if 'instagram.com' in url.lower():
+            logger.info(f"📱 {platform_name} detected - using instaloader")
+            return await self.download_instagram_with_instaloader(url, format_type)
+        
+        # Use subprocess for YouTube
+        elif any(platform in url.lower() for platform in ['youtube.com', 'youtu.be']):
             logger.info(f"📱 {platform_name} detected - using direct yt-dlp subprocess")
             return await self.download_via_subprocess(url, format_type, platform_name)
         
@@ -462,6 +597,7 @@ Send me a URL from any of these platforms and I'll download it for you:
 
 📱 <b>Supported Platforms:</b>
 • Twitter/X (videos) 🐦
+• Instagram (posts & reels) 📸
 • SoundCloud (audio) 🎧
 
 📝 <b>How to use:</b>
@@ -471,7 +607,7 @@ Send me a URL from any of these platforms and I'll download it for you:
 
 ⚠️ <b>Note:</b> Files must be under {max_size_mb}MB due to Telegram limits.
 
-🚀 <b>Enhanced:</b> YouTube & Instagram use optimized downloading for better success rates!
+🚀 <b>Enhanced:</b> YouTube uses optimized downloading and Instagram uses instaloader for better success rates!
     """
     
     await update.message.reply_text(welcome_text, parse_mode='HTML')
@@ -526,14 +662,14 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         format_text = "Choose download format (Enhanced for better success):"
     elif 'instagram.com' in url.lower():
-        # Instagram - enhanced with subprocess
+        # Instagram - using instaloader
         keyboard = [
             [
-                InlineKeyboardButton("🎥 Video (Enhanced)", callback_data=f"video|{url_id}"),
-                InlineKeyboardButton("🎵 Audio (Enhanced)", callback_data=f"audio|{url_id}")
+                InlineKeyboardButton("🎥 Video/Image", callback_data=f"video|{url_id}"),
+                InlineKeyboardButton("🎵 Audio (Video only)", callback_data=f"audio|{url_id}")
             ]
         ]
-        format_text = "Choose download format (Enhanced for better success):"
+        format_text = "Choose download format (Instaloader powered):"
     else:
         # Other platforms - standard options
         keyboard = [
@@ -575,7 +711,9 @@ async def handle_format_selection(update: Update, context: ContextTypes.DEFAULT_
     format_emoji = "🎥" if format_type == "video" else "🎵"
     enhanced_platforms = ['YouTube', 'Instagram']
     
-    if platform in enhanced_platforms:
+    if platform == 'Instagram':
+        download_msg = f"{format_emoji} Downloading {format_type} from {platform} (Instaloader)...\n\n⏳ Using specialized Instagram downloader for better reliability."
+    elif platform == 'YouTube':
         download_msg = f"{format_emoji} Downloading {format_type} from {platform} (Enhanced)...\n\n⏳ Using optimized method for better success rate."
     else:
         download_msg = f"{format_emoji} Downloading {format_type} from {platform}...\n\n⏳ This may take a moment depending on file size."
@@ -591,7 +729,7 @@ async def handle_format_selection(update: Update, context: ContextTypes.DEFAULT_
             
             # Add helpful suggestions for common errors
             if "detected automation" in error.lower() or "bot detection" in error.lower():
-                if platform in enhanced_platforms:
+                if platform == 'YouTube':
                     error_text += "\n\n💡 Enhanced method tried but failed. Suggestions:\n"
                     error_text += "• Try different content from the same platform\n"
                     error_text += "• Wait 10-15 minutes before trying again\n"
@@ -601,7 +739,13 @@ async def handle_format_selection(update: Update, context: ContextTypes.DEFAULT_
                     error_text += "• Try different content\n"
                     error_text += "• Wait 10-15 minutes before trying again"
             elif "private" in error.lower() or "unavailable" in error.lower():
-                error_text += "\n\n💡 Try: Make sure the content is public and available in your region"
+                if platform == 'Instagram':
+                    error_text += "\n\n💡 Instagram Tips:\n"
+                    error_text += "• Make sure the account is public\n"
+                    error_text += "• Check if the post still exists\n"
+                    error_text += "• Some accounts may require login"
+                else:
+                    error_text += "\n\n💡 Try: Make sure the content is public and available in your region"
             elif "age-restricted" in error.lower():
                 error_text += "\n\n💡 Note: Age-restricted content cannot be downloaded"
             elif "timed out" in error.lower():
@@ -623,15 +767,20 @@ async def handle_format_selection(update: Update, context: ContextTypes.DEFAULT_
         
         # Send the file
         success_msg = f"📤 Uploading {format_type}..."
-        if platform in enhanced_platforms:
+        if platform == 'Instagram':
+            success_msg += " (Instaloader succeeded!)"
+        elif platform == 'YouTube':
             success_msg += " (Enhanced method succeeded!)"
         
         await query.edit_message_text(success_msg)
         
         # Prepare caption
-        caption = f"🎵 Downloaded from {platform}" if format_type == 'audio' else f"🎥 Downloaded from {platform}"
-        if platform in enhanced_platforms:
-            caption += " (Enhanced)"
+        if platform == 'Instagram':
+            caption = f"🎵 Downloaded from {platform} (Instaloader)" if format_type == 'audio' else f"🎥 Downloaded from {platform} (Instaloader)"
+        elif platform == 'YouTube':
+            caption = f"🎵 Downloaded from {platform} (Enhanced)" if format_type == 'audio' else f"🎥 Downloaded from {platform} (Enhanced)"
+        else:
+            caption = f"🎵 Downloaded from {platform}" if format_type == 'audio' else f"🎥 Downloaded from {platform}"
         
         with open(filepath, 'rb') as file:
             if format_type == 'audio':
@@ -641,15 +790,25 @@ async def handle_format_selection(update: Update, context: ContextTypes.DEFAULT_
                     caption=caption
                 )
             else:
-                await context.bot.send_video(
-                    chat_id=query.message.chat_id,
-                    video=file,
-                    caption=caption,
-                    supports_streaming=True
-                )
+                # For Instagram images, send as photo; for videos, send as video
+                if platform == 'Instagram' and filepath.lower().endswith(('.jpg', '.jpeg', '.png')):
+                    await context.bot.send_photo(
+                        chat_id=query.message.chat_id,
+                        photo=file,
+                        caption=caption
+                    )
+                else:
+                    await context.bot.send_video(
+                        chat_id=query.message.chat_id,
+                        video=file,
+                        caption=caption,
+                        supports_streaming=True
+                    )
         
         final_msg = f"✅ {format_type.title()} downloaded successfully!"
-        if platform in enhanced_platforms:
+        if platform == 'Instagram':
+            final_msg += f"\n📸 Instaloader method used for {platform}"
+        elif platform == 'YouTube':
             final_msg += f"\n🚀 Enhanced method used for {platform}"
         
         await query.edit_message_text(final_msg)
@@ -689,10 +848,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 📱 Supported Platforms:
 • Twitter/X - Videos and GIFs 🐦
+• Instagram - Posts, Reels, Images 📸
 • SoundCloud - Audio tracks 🎧
 
 🚀 Enhanced Platforms:
-YouTube and Instagram use optimized downloading with direct yt-dlp subprocess calls for better success rates and cookie support.
+• YouTube uses optimized downloading with direct yt-dlp subprocess calls for better success rates and cookie support
+• Instagram uses instaloader library for reliable access to posts and reels
 
 ⚠️ Limitations:
 • Maximum file size: {max_size_mb}MB
@@ -700,14 +861,15 @@ YouTube and Instagram use optimized downloading with direct yt-dlp subprocess ca
 • Some private or age-restricted content may not work
 
 💡 Tips:
-• Enhanced platforms (YouTube, Instagram) have higher success rates
+• YouTube has enhanced success rates with subprocess method
+• Instagram uses instaloader for better reliability and no browser requirements
 • Public content works better than private
 • Educational content typically works better than viral content
 • If download fails, try waiting 10-15 minutes and retry
 • Different content from the same platform may work better
 
 🍪 Cookie Support:
-The bot supports YouTube cookies for better access to content. Cookies are automatically used when configured.
+The bot supports YouTube cookies for better access to content. Instagram uses instaloader which doesn't require cookies.
     """
     
     await update.message.reply_text(help_text)
@@ -758,8 +920,8 @@ def main():
     
     # Run the bot until the user presses Ctrl-C
     logger.info("🚀 Enhanced Bot is running! Send /start to begin.")
-    logger.info("📱 Ready to download media with enhanced YouTube & Instagram support!")
-    logger.info("🎯 Enhanced platforms: YouTube, Instagram (using direct yt-dlp subprocess)")
+    logger.info("📱 Ready to download media with enhanced support!")
+    logger.info("🎯 YouTube: Enhanced yt-dlp subprocess | Instagram: Instaloader library")
     
     try:
         application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
