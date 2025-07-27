@@ -546,13 +546,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Send me a URL from any of these platforms and I'll download it for you:
 
 📱 <b>Supported Platforms:</b>
-• YouTube (videos & audio) 🎵
-• Instagram (posts & stories) 📸
 • Twitter/X (videos) 🐦
-• TikTok (videos) 📱
 • SoundCloud (audio) 🎧
-• Facebook (videos) 📘
-• Vimeo (videos) 🎥
 
 📝 <b>How to use:</b>
 1. Send me a URL
@@ -681,13 +676,8 @@ async def handle_membership_check(update: Update, context: ContextTypes.DEFAULT_
 Send me a URL from any of these platforms and I'll download it for you:
 
 📱 <b>Supported Platforms:</b>
-• YouTube (videos & audio) 🎵
-• Instagram (posts & stories) 📸  
 • Twitter/X (videos) 🐦
-• TikTok (videos) 📱
 • SoundCloud (audio) 🎧
-• Facebook (videos) 📘
-• Vimeo (videos) 🎥
 
 📝 <b>How to use:</b>
 1. Send me a URL
@@ -864,13 +854,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 4. Wait for download and upload
 
 📱 Supported Platforms:
-• YouTube - Videos and audio 🎵 (Enhanced)
-• Instagram - Posts and stories 📸 (Enhanced)
 • Twitter/X - Videos and GIFs 🐦
-• TikTok - Videos 📱
 • SoundCloud - Audio tracks 🎧
-• Facebook - Videos 📘
-• Vimeo - Videos 🎥
 
 🚀 Enhanced Platforms:
 YouTube and Instagram use optimized downloading with direct yt-dlp subprocess calls for better success rates and cookie support.
