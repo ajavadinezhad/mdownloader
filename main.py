@@ -229,7 +229,7 @@ class MediaDownloaderBot:
                         }
                     },
                     'age_limit': 21,
-                    'cookiefile': os.getenv('YTDLP_COOKIES')  # ← Directly here, no validation
+                    'cookies': os.getenv('YTDLP_COOKIES')  # ← Directly here, no validation
                 })
                 strategies.append(strategy1)
                 
@@ -243,7 +243,7 @@ class MediaDownloaderBot:
                             'skip': ['dash', 'hls'],
                         }
                     },
-                    'cookiefile': os.getenv('YTDLP_COOKIES')  # ← Directly here, no validation
+                    'cookies': os.getenv('YTDLP_COOKIES')  # ← Directly here, no validation
                 })
                 strategies.append(strategy2)
                 
