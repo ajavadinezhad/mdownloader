@@ -56,7 +56,7 @@ class MediaDownloaderBot:
            # 'instagram.com': 'Instagram',
             'soundcloud.com': 'SoundCloud',
             #'tiktok.com': 'TikTok',
-            'facebook.com': 'Facebook',
+            #'facebook.com': 'Facebook',
             'vimeo.com': 'Vimeo'
         }
         # Store URLs temporarily with short IDs
@@ -614,21 +614,6 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Check if platform is supported
     if not bot.is_supported_url(url):
-        supported = ", ".join(bot.supported_platforms.values())
-        logger.warning(f"Unsupported URL: {url}")
-        
-        # Get domain for display
-        try:
-            domain = urlparse(url).netloc
-        except:
-            domain = "unknown"
-        
-        await update.message.reply_text(
-            f"❌ Platform not supported.\n\n"
-            f"Supported platforms: {supported}\n\n"
-            f"Your URL domain: {domain}",
-            parse_mode=None
-        )
         return
     
     platform = bot.get_platform_name(url)
