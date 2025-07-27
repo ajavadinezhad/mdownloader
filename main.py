@@ -536,187 +536,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message = await membership_required_message(not_joined)
         keyboard = await create_join_keyboard(not_joined)
         
-        await query.edit_message_text(message, reply_markup=keyboard, parse_mode='HTML')
-        return
-    
-    data_parts = query.data.split('|', 1)
-    if len(data_parts) != 2:
-        await query.edit_message_text("❌ Invalid selection")
-        return
-    
-    format_type, url_id = data_parts
-    
-    # Retrieve the actual URL
-    url = bot.get_url(url_id)
-    if not url:
-        await query.edit_message_text("❌ Session expired. Please send the URL again.")
-        return
-    
-    platform = bot.get_platform_name(url)
-    
-    # Show downloading message
-    format_emoji = "🎥" if format_type == "video" else "🎵"
-    await query.edit_message_text(
-        f"{format_emoji} Downloading {format_type} from {platform}...\n\n"
-        f"⏳ This may take a moment depending on file size."
-    )
-    
-    # Download the media
-    try:
-        filepath, error = await bot.download_media(url, format_type)
-        
-        if error:
-            error_text = f"❌ {error}"
-            
-            # Add helpful suggestions for common errors
-            if "YouTube detected automated access" in error or "bot detection" in error.lower():
-                error_text += "\n\n💡 Suggestions:\n"
-                error_text += "• Try a different YouTube video\n"
-                error_text += "• Wait 10-15 minutes before trying again\n"
-                error_text += "• Use shorter videos (under 5 minutes)\n"
-                error_text += "• Educational content works better"
-            elif "private" in error.lower() or "unavailable" in error.lower():
-                error_text += "\n\n💡 Try: Make sure the video is public and available in your region"
-            elif "age-restricted" in error.lower():
-                error_text += "\n\n💡 Note: Age-restricted content cannot be downloaded"
-            
-            await query.edit_message_text(error_text)
-            return
-        
-        if not filepath or not os.path.exists(filepath):
-            await query.edit_message_text("❌ Download failed - file not found")
-            return
-        
-        # Get file info
-        file_size = os.path.getsize(filepath)
-        max_size_mb = MAX_FILE_SIZE // (1024 * 1024)
-        if file_size > MAX_FILE_SIZE:
-            await query.edit_message_text(f"❌ File too large ({file_size // (1024*1024)}MB). Telegram limit is {max_size_mb}MB.")
-            return
-        
-        # Send the file
-        await query.edit_message_text(f"📤 Uploading {format_type}...")
-        
-        with open(filepath, 'rb') as file:
-            if format_type == 'audio':
-                await context.bot.send_audio(
-                    chat_id=query.message.chat_id,
-                    audio=file,
-                    caption=f"🎵 Downloaded from {platform}"
-                )
-            else:
-                await context.bot.send_video(
-                    chat_id=query.message.chat_id,
-                    video=file,
-                    caption=f"🎥 Downloaded from {platform}",
-                    supports_streaming=True
-                )
-        
-        await query.edit_message_text(f"✅ {format_type.title()} downloaded successfully!")
-        
-    except Exception as e:
-        logger.error(f"Error in download process: {e}")
-        await query.edit_message_text(f"❌ An error occurred: {str(e)}")
-
-    finally:
-        # Clean up temporary files
-        try:
-            if filepath and os.path.exists(filepath):
-                # Get temp directory from filepath
-                temp_dir = os.path.dirname(filepath)
-
-                os.remove(filepath)
-                logger.info(f"🗑️ Deleted file: {os.path.basename(filepath)}")
-
-                if temp_dir and os.path.exists(temp_dir):
-                    shutil.rmtree(temp_dir, ignore_errors=True)
-                    logger.info(f"🗑️ Deleted temp directory: {os.path.basename(temp_dir)}")
-
-        except Exception as e:
-            logger.warning(f"⚠️ Cleanup failed: {e}")
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Send a message when the command /help is issued."""
-    max_size_mb = MAX_FILE_SIZE // (1024*1024)
-    help_text = f"""
-🆘 Help - Media Downloader Bot
-
-📝 How to download:
-1. Copy a URL from supported platforms
-2. Send it to this bot
-3. Choose video or audio format
-4. Wait for download and upload
-
-📱 Supported Platforms:
-• YouTube - Videos and audio
-• Twitter/X - Videos and GIFs
-• Instagram - Posts and stories
-• TikTok - Videos
-• SoundCloud - Audio tracks
-• Facebook - Videos
-• Vimeo - Videos
-
-⚠️ Limitations:
-• Maximum file size: {max_size_mb}MB
-• Audio is converted to MP3 format
-• Some private or age-restricted content may not work
-
-💡 Tips:
-• For YouTube, you can use both youtube.com and youtu.be links
-• Instagram stories require the full URL
-• Some platforms may have regional restrictions
-• Educational content works better than viral videos
-    """
-    
-    await update.message.reply_text(help_text)
-
-def main():
-    """Start the bot."""
-    if not BOT_TOKEN:
-        logger.error("❌ Bot token not configured!")
-        return
-    
-    logger.info("🤖 Initializing Telegram Media Downloader Bot...")
-    logger.info(f"📁 Download directory: {DOWNLOAD_DIR}")
-    logger.info(f"📏 Max file size: {MAX_FILE_SIZE // (1024*1024)}MB")
-    
-    # Check cookie configuration
-    cookies_file = os.getenv('YTDLP_COOKIES')
-    if cookies_file and os.path.exists(cookies_file):
-        logger.info(f"🍪 YouTube cookies configured: {cookies_file}")
-    else:
-        logger.warning("⚠️ No YouTube cookies configured - downloads may fail")
-    
-    # Create the Application
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    # Add handlers
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
-    application.add_handler(CallbackQueryHandler(handle_format_selection))
-    
-    # Run the bot until the user presses Ctrl-C
-    logger.info("🚀 Bot is running! Send /start to begin.")
-    logger.info("📱 Ready to download media from supported platforms!")
-    
-    try:
-        application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
-    except KeyboardInterrupt:
-        logger.info("🛑 Bot stopped by user")
-    except Exception as e:
-        logger.error(f"❌ Bot crashed: {e}")
-        raise
-
-if __name__ == '__main__':
-    main()
-    is_member, not_joined = await check_user_membership(user_id, context)
-    
-    if not is_member:
-        # User needs to join channels first
-        message = await membership_required_message(not_joined)
-        keyboard = await create_join_keyboard(not_joined)
-        
         await update.message.reply_text(message, reply_markup=keyboard, parse_mode='HTML')
         return
     
@@ -898,3 +717,184 @@ async def handle_format_selection(update: Update, context: ContextTypes.DEFAULT_
     user_id = query.from_user.id
     
     # Check if user is member of required channels
+    is_member, not_joined = await check_user_membership(user_id, context)
+    
+    if not is_member:
+        # User needs to join channels first
+        message = await membership_required_message(not_joined)
+        keyboard = await create_join_keyboard(not_joined)
+        
+        await query.edit_message_text(message, reply_markup=keyboard, parse_mode='HTML')
+        return
+    
+    data_parts = query.data.split('|', 1)
+    if len(data_parts) != 2:
+        await query.edit_message_text("❌ Invalid selection")
+        return
+    
+    format_type, url_id = data_parts
+    
+    # Retrieve the actual URL
+    url = bot.get_url(url_id)
+    if not url:
+        await query.edit_message_text("❌ Session expired. Please send the URL again.")
+        return
+    
+    platform = bot.get_platform_name(url)
+    
+    # Show downloading message
+    format_emoji = "🎥" if format_type == "video" else "🎵"
+    await query.edit_message_text(
+        f"{format_emoji} Downloading {format_type} from {platform}...\n\n"
+        f"⏳ This may take a moment depending on file size."
+    )
+    
+    # Download the media
+    try:
+        filepath, error = await bot.download_media(url, format_type)
+        
+        if error:
+            error_text = f"❌ {error}"
+            
+            # Add helpful suggestions for common errors
+            if "YouTube detected automated access" in error or "bot detection" in error.lower():
+                error_text += "\n\n💡 Suggestions:\n"
+                error_text += "• Try a different YouTube video\n"
+                error_text += "• Wait 10-15 minutes before trying again\n"
+                error_text += "• Use shorter videos (under 5 minutes)\n"
+                error_text += "• Educational content works better"
+            elif "private" in error.lower() or "unavailable" in error.lower():
+                error_text += "\n\n💡 Try: Make sure the video is public and available in your region"
+            elif "age-restricted" in error.lower():
+                error_text += "\n\n💡 Note: Age-restricted content cannot be downloaded"
+            
+            await query.edit_message_text(error_text)
+            return
+        
+        if not filepath or not os.path.exists(filepath):
+            await query.edit_message_text("❌ Download failed - file not found")
+            return
+        
+        # Get file info
+        file_size = os.path.getsize(filepath)
+        max_size_mb = MAX_FILE_SIZE // (1024 * 1024)
+        if file_size > MAX_FILE_SIZE:
+            await query.edit_message_text(f"❌ File too large ({file_size // (1024*1024)}MB). Telegram limit is {max_size_mb}MB.")
+            return
+        
+        # Send the file
+        await query.edit_message_text(f"📤 Uploading {format_type}...")
+        
+        with open(filepath, 'rb') as file:
+            if format_type == 'audio':
+                await context.bot.send_audio(
+                    chat_id=query.message.chat_id,
+                    audio=file,
+                    caption=f"🎵 Downloaded from {platform}"
+                )
+            else:
+                await context.bot.send_video(
+                    chat_id=query.message.chat_id,
+                    video=file,
+                    caption=f"🎥 Downloaded from {platform}",
+                    supports_streaming=True
+                )
+        
+        await query.edit_message_text(f"✅ {format_type.title()} downloaded successfully!")
+        
+    except Exception as e:
+        logger.error(f"Error in download process: {e}")
+        await query.edit_message_text(f"❌ An error occurred: {str(e)}")
+
+    finally:
+        # Clean up temporary files
+        try:
+            if 'filepath' in locals() and filepath and os.path.exists(filepath):
+                # Get temp directory from filepath
+                temp_dir = os.path.dirname(filepath)
+
+                os.remove(filepath)
+                logger.info(f"🗑️ Deleted file: {os.path.basename(filepath)}")
+
+                if temp_dir and os.path.exists(temp_dir):
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    logger.info(f"🗑️ Deleted temp directory: {os.path.basename(temp_dir)}")
+
+        except Exception as e:
+            logger.warning(f"⚠️ Cleanup failed: {e}")
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a message when the command /help is issued."""
+    max_size_mb = MAX_FILE_SIZE // (1024*1024)
+    help_text = f"""
+🆘 Help - Media Downloader Bot
+
+📝 How to download:
+1. Copy a URL from supported platforms
+2. Send it to this bot
+3. Choose video or audio format
+4. Wait for download and upload
+
+📱 Supported Platforms:
+• YouTube - Videos and audio
+• Twitter/X - Videos and GIFs
+• Instagram - Posts and stories
+• TikTok - Videos
+• SoundCloud - Audio tracks
+• Facebook - Videos
+• Vimeo - Videos
+
+⚠️ Limitations:
+• Maximum file size: {max_size_mb}MB
+• Audio is converted to MP3 format
+• Some private or age-restricted content may not work
+
+💡 Tips:
+• For YouTube, you can use both youtube.com and youtu.be links
+• Instagram stories require the full URL
+• Some platforms may have regional restrictions
+• Educational content works better than viral videos
+    """
+    
+    await update.message.reply_text(help_text)
+
+def main():
+    """Start the bot."""
+    if not BOT_TOKEN:
+        logger.error("❌ Bot token not configured!")
+        return
+    
+    logger.info("🤖 Initializing Telegram Media Downloader Bot...")
+    logger.info(f"📁 Download directory: {DOWNLOAD_DIR}")
+    logger.info(f"📏 Max file size: {MAX_FILE_SIZE // (1024*1024)}MB")
+    
+    # Check cookie configuration
+    cookies_file = os.getenv('YTDLP_COOKIES')
+    if cookies_file and os.path.exists(cookies_file):
+        logger.info(f"🍪 YouTube cookies configured: {cookies_file}")
+    else:
+        logger.warning("⚠️ No YouTube cookies configured - downloads may fail")
+    
+    # Create the Application
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    # Add handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
+    application.add_handler(CallbackQueryHandler(handle_format_selection))
+    
+    # Run the bot until the user presses Ctrl-C
+    logger.info("🚀 Bot is running! Send /start to begin.")
+    logger.info("📱 Ready to download media from supported platforms!")
+    
+    try:
+        application.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+    except KeyboardInterrupt:
+        logger.info("🛑 Bot stopped by user")
+    except Exception as e:
+        logger.error(f"❌ Bot crashed: {e}")
+        raise
+
+if __name__ == '__main__':
+    main()
