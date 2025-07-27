@@ -229,6 +229,7 @@ class MediaDownloaderBot:
                         }
                     },
                     'age_limit': 21,
+                    'cookiefile': os.getenv('YTDLP_COOKIES')  # ← Directly here, no validation
                 })
                 strategies.append(strategy1)
                 
@@ -241,7 +242,8 @@ class MediaDownloaderBot:
                             'player_client': ['android'],
                             'skip': ['dash', 'hls'],
                         }
-                    }
+                    },
+                    'cookiefile': os.getenv('YTDLP_COOKIES')  # ← Directly here, no validation
                 })
                 strategies.append(strategy2)
                 
@@ -772,24 +774,24 @@ async def handle_format_selection(update: Update, context: ContextTypes.DEFAULT_
     except Exception as e:
         logger.error(f"Error in download process: {e}")
         await query.edit_message_text(f"❌ An error occurred: {str(e)}")
-        
+
     finally:
         # Clean up temporary files
         try:
             if filepath and os.path.exists(filepath):
                 # Get temp directory from filepath
                 temp_dir = os.path.dirname(filepath)
-                
+
                 os.remove(filepath)
                 logger.info(f"🗑️ Deleted file: {os.path.basename(filepath)}")
-                
+
                 if temp_dir and os.path.exists(temp_dir):
                     shutil.rmtree(temp_dir, ignore_errors=True)
                     logger.info(f"🗑️ Deleted temp directory: {os.path.basename(temp_dir)}")
-                    
+
         except Exception as e:
             logger.warning(f"⚠️ Cleanup failed: {e}")
-    
+
 async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Debug command to test URL detection"""
     if not context.args:
