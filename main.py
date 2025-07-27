@@ -309,6 +309,40 @@ class MediaDownloaderBot:
                     }
                 })
                 strategies.append(strategy2)
+            elif 'tiktok.com' in url:
+                # Enhanced TikTok strategies
+                logger.info("📱 TikTok using enhanced yt-dlp strategies")
+                
+                # TikTok Strategy 1: Mobile browser
+                strategy1 = base_opts.copy()
+                strategy1.update({
+                    'format': 'best[height<=720]/best',
+                    'http_headers': {
+                        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Referer': 'https://www.tiktok.com/',
+                        'Sec-Fetch-Dest': 'document',
+                        'Sec-Fetch-Mode': 'navigate',
+                    },
+                    'sleep_interval': 2,
+                    'max_sleep_interval': 5,
+                })
+                strategies.append(strategy1)
+                
+                # TikTok Strategy 2: Desktop browser
+                strategy2 = base_opts.copy()
+                strategy2.update({
+                    'format': 'best[height<=480]/best',
+                    'http_headers': {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        'Referer': 'https://www.tiktok.com/',
+                        'DNT': '1',
+                    },
+                    'sleep_interval': 1,
+                })
+                strategies.append(strategy2)
                 
             else:
                 # Default strategy for other platforms (SoundCloud, TikTok, etc.)
@@ -328,8 +362,6 @@ class MediaDownloaderBot:
                             'preferredcodec': 'mp3',
                             'preferredquality': '192',
                         }]
-                elif 'tiktok.com' in url:
-                    strategy['format'] = 'best[height<=720]'
                 elif 'facebook.com' in url:
                     strategy['format'] = 'best[height<=720]'
                 elif 'vimeo.com' in url:
