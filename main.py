@@ -625,6 +625,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url_pattern = r'https?://[^\s]+'
     urls = re.findall(url_pattern, text)
     
+    url = None
     if urls:
         url = urls[0]  # Take the first URL found
     else:
@@ -632,6 +633,11 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         urls = re.findall(url_pattern, original_text)
         if urls:
             url = urls[0]
+    
+    # If no URL found, return silently
+    if not url:
+        logger.info("No URL found in message")
+        return
     
     logger.info(f"Received URL: {url}")
     
