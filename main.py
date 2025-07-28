@@ -170,69 +170,81 @@ class MediaDownloaderBot:
         temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
         
         try:
-            # Extract shortcode from URL
+            # Try instaloader first
             shortcode_match = re.search(r'/p/([A-Za-z0-9_-]+)', url) or re.search(r'/reel/([A-Za-z0-9_-]+)', url)
             if not shortcode_match:
                 return None, "❌ Invalid Instagram URL"
             
             shortcode = shortcode_match.group(1)
-            post = instaloader.Post.from_shortcode(self.insta_loader.context, shortcode)
             
-            if post.is_video:
-                # Download video
-                response = requests.get(post.video_url, stream=True)
-                response.raise_for_status()
+            try:
+                post = instaloader.Post.from_shortcode(self.insta_loader.context, shortcode)
                 
-                filename = f"instagram_video_{shortcode}.mp4"
-                filepath = os.path.join(temp_dir, filename)
-                
-                with open(filepath, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                
-                # Check file size
-                if os.path.getsize(filepath) > MAX_FILE_SIZE:
-                    return None, f"❌ File too large. Limit: {MAX_FILE_SIZE // (1024*1024)}MB"
-                
-                # Convert to audio if requested
-                if format_type == 'audio':
-                    audio_filepath = os.path.join(temp_dir, f"instagram_audio_{shortcode}.mp3")
-                    try:
-                        cmd = ['ffmpeg', '-i', filepath, '-vn', '-acodec', 'mp3', '-ab', '192k', audio_filepath, '-y']
-                        result = subprocess.run(cmd, capture_output=True, timeout=60)
-                        if result.returncode == 0 and os.path.exists(audio_filepath):
-                            os.remove(filepath)
-                            return audio_filepath, None
-                        else:
+                if post.is_video:
+                    # Download video
+                    response = requests.get(post.video_url, stream=True)
+                    response.raise_for_status()
+                    
+                    filename = f"instagram_video_{shortcode}.mp4"
+                    filepath = os.path.join(temp_dir, filename)
+                    
+                    with open(filepath, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                    
+                    # Check file size
+                    if os.path.getsize(filepath) > MAX_FILE_SIZE:
+                        return None, f"❌ File too large. Limit: {MAX_FILE_SIZE // (1024*1024)}MB"
+                    
+                    # Convert to audio if requested
+                    if format_type == 'audio':
+                        audio_filepath = os.path.join(temp_dir, f"instagram_audio_{shortcode}.mp3")
+                        try:
+                            cmd = ['ffmpeg', '-i', filepath, '-vn', '-acodec', 'mp3', '-ab', '192k', audio_filepath, '-y']
+                            result = subprocess.run(cmd, capture_output=True, timeout=60)
+                            if result.returncode == 0 and os.path.exists(audio_filepath):
+                                os.remove(filepath)
+                                return audio_filepath, None
+                            else:
+                                return None, "❌ Audio extraction failed"
+                        except:
                             return None, "❌ Audio extraction failed"
-                    except:
-                        return None, "❌ Audio extraction failed"
-                
-                return filepath, None
-            else:
-                # Download image
-                if format_type == 'audio':
-                    return None, "❌ This post contains only images"
-                
-                response = requests.get(post.url, stream=True)
-                response.raise_for_status()
-                
-                filename = f"instagram_image_{shortcode}.jpg"
-                filepath = os.path.join(temp_dir, filename)
-                
-                with open(filepath, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
-                
-                if os.path.getsize(filepath) > MAX_FILE_SIZE:
-                    return None, f"❌ File too large. Limit: {MAX_FILE_SIZE // (1024*1024)}MB"
-                
-                return filepath, None
+                    
+                    return filepath, None
+                else:
+                    # Download image
+                    if format_type == 'audio':
+                        return None, "❌ This post contains only images"
+                    
+                    response = requests.get(post.url, stream=True)
+                    response.raise_for_status()
+                    
+                    filename = f"instagram_image_{shortcode}.jpg"
+                    filepath = os.path.join(temp_dir, filename)
+                    
+                    with open(filepath, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                    
+                    if os.path.getsize(filepath) > MAX_FILE_SIZE:
+                        return None, f"❌ File too large. Limit: {MAX_FILE_SIZE // (1024*1024)}MB"
+                    
+                    return filepath, None
+            
+            except Exception as insta_error:
+                # If instaloader fails, try yt-dlp as fallback
+                if "401" in str(insta_error) or "rate limit" in str(insta_error).lower():
+                    logger.warning(f"Instagram rate limited, trying yt-dlp fallback: {insta_error}")
+                    return await self.download_with_ytdlp(url, format_type, "Instagram")
+                else:
+                    raise insta_error
                 
         except Exception as e:
             logger.error(f"Instagram error: {e}")
             if 'private' in str(e).lower():
                 return None, "❌ Private account or post"
+            elif '401' in str(e) or 'rate limit' in str(e).lower():
+                return None, "❌ Instagram is rate limiting. Please wait a few minutes and try again."
             else:
                 return None, f"❌ Instagram download failed: {str(e)[:100]}"
     
