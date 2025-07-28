@@ -117,11 +117,8 @@ class MediaDownloaderBot:
             "retries": 5,
             "quiet": False,
             "extractor_args": {
-                "youtube": {
-                    "player_client": ["mweb", "web"],  # avoid TV client
-                    "fetch_pot": ["auto"],             # automatically request PO token
-                    "player_skip": ["configs"],
-                }
+            # note: this is one string, not a dict
+                "youtube": "player_client=mweb,web;fetch_pot=auto;player_skip=configs"
             }
         }
 
