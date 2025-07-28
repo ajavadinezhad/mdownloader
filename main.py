@@ -1,5 +1,3 @@
-else:
-                return None, f"❌ Download failed. Try a different YouTube video."import os
 import asyncio
 import logging
 import tempfile
