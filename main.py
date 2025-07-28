@@ -95,8 +95,8 @@ class MediaDownloaderBot:
         except:
             return "Unknown"
     
-    async def download_youtube_simple(self, url, format_type):
-        """Simple yt-dlp configuration for YouTube"""
+    async def download_youtube_with_cookies(self, url, format_type):
+        """yt-dlp with browser cookies to bypass bot detection"""
         temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
         
         try:
@@ -109,117 +109,151 @@ class MediaDownloaderBot:
                     clean_url = f"https://www.youtube.com/watch?v={video_id}"
                     logger.info(f"Converted Shorts URL: {clean_url}")
             
-            logger.info(f"Using simple yt-dlp for: {clean_url}")
+            logger.info(f"Using yt-dlp with cookies for: {clean_url}")
             
-            # Simple yt-dlp configuration
+            # yt-dlp configuration with cookie extraction
             ydl_opts = {
-                'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),  # Use video ID as filename
+                'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
                 'noplaylist': True,
-                'retries': 3,
-                'socket_timeout': 30,
-                'quiet': True,  # Reduce output
-                'no_warnings': True,
+                'retries': 5,
+                'socket_timeout': 60,
+                'quiet': False,
+                'no_warnings': False,
                 'extract_flat': False,
                 'writethumbnail': False,
                 'writeinfojson': False,
-                # Minimal headers
+                # Try to extract cookies from browser
+                'cookiesfrombrowser': ('chrome', None, None, None),  # Try Chrome first
+                # Alternative user agents
                 'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': '*/*',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'none',
+                    'Sec-Fetch-User': '?1',
+                    'Cache-Control': 'max-age=0',
                 },
-                # Simple extractor settings
+                # Extractor options to avoid bot detection
                 'extractor_args': {
                     'youtube': {
-                        'player_client': ['android'],  # Use Android client
-                        'skip': ['hls', 'dash'],  # Skip complex formats
+                        'player_client': ['android', 'web', 'ios'],
+                        'player_skip': ['configs'],
+                        'skip': ['dash'],
                     }
                 }
             }
             
             if format_type == 'audio':
-                # Simple audio extraction
                 ydl_opts.update({
-                    'format': 'worstaudio/worst',  # Use worst quality for better success
+                    'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
                     'postprocessors': [{
                         'key': 'FFmpegExtractAudio',
                         'preferredcodec': 'mp3',
-                        'preferredquality': '128',  # Lower quality
+                        'preferredquality': '192',
                     }]
                 })
             else:
-                # Simple video format
-                ydl_opts['format'] = 'worst[height>=360]/worst'  # Use worst quality for better success
+                ydl_opts['format'] = 'best[height<=720][ext=mp4]/best[height<=720]/best[ext=mp4]/best'
             
-            # Download with yt-dlp
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                # Extract info first
-                try:
-                    logger.info("Extracting video info...")
+            # Try with cookies first
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    logger.info("Trying with Chrome cookies...")
                     info = ydl.extract_info(clean_url, download=False)
                     
                     title = info.get('title', 'Unknown')
                     duration = info.get('duration', 0)
+                    filesize = info.get('filesize') or info.get('filesize_approx', 0)
                     
                     logger.info(f"Video: {title} ({duration}s)")
                     
-                    # Check if it's too long (optional)
-                    if duration and duration > 3600:  # 1 hour
-                        return None, "❌ Video too long (>1 hour)"
-                
-                except Exception as info_error:
-                    logger.warning(f"Info extraction failed: {info_error}")
-                    # Continue anyway
-                
-                # Download
-                logger.info("Starting download...")
-                ydl.download([clean_url])
-                
-                # Find downloaded file
-                files = [f for f in os.listdir(temp_dir) if os.path.isfile(os.path.join(temp_dir, f))]
-                
-                if files:
-                    filepath = os.path.join(temp_dir, files[0])
-                    
-                    # Check file size
-                    file_size = os.path.getsize(filepath)
-                    if file_size > MAX_FILE_SIZE:
-                        size_mb = file_size // (1024 * 1024)
+                    if filesize and filesize > MAX_FILE_SIZE:
+                        size_mb = filesize // (1024 * 1024)
                         max_mb = MAX_FILE_SIZE // (1024 * 1024)
                         return None, f"❌ File too large ({size_mb}MB). Limit: {max_mb}MB"
                     
-                    logger.info(f"Download successful: {file_size // (1024*1024)}MB")
-                    return filepath, None
-                else:
-                    return None, "❌ No file downloaded"
+                    # Download
+                    logger.info("Starting download with cookies...")
+                    ydl.download([clean_url])
                     
-        except yt_dlp.DownloadError as e:
-            logger.error(f"yt-dlp download error: {e}")
+                    # Find downloaded file
+                    files = [f for f in os.listdir(temp_dir) if os.path.isfile(os.path.join(temp_dir, f))]
+                    
+                    if files:
+                        filepath = os.path.join(temp_dir, files[0])
+                        file_size = os.path.getsize(filepath)
+                        
+                        if file_size > MAX_FILE_SIZE:
+                            size_mb = file_size // (1024 * 1024)
+                            max_mb = MAX_FILE_SIZE // (1024 * 1024)
+                            return None, f"❌ File too large ({size_mb}MB). Limit: {max_mb}MB"
+                        
+                        logger.info(f"Download successful: {file_size // (1024*1024)}MB")
+                        return filepath, None
+                    else:
+                        return None, "❌ No file downloaded"
+                        
+            except Exception as cookie_error:
+                logger.warning(f"Chrome cookies failed: {cookie_error}")
+                
+                # Try Firefox cookies
+                try:
+                    ydl_opts['cookiesfrombrowser'] = ('firefox', None, None, None)
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        logger.info("Trying with Firefox cookies...")
+                        ydl.download([clean_url])
+                        
+                        files = [f for f in os.listdir(temp_dir) if os.path.isfile(os.path.join(temp_dir, f))]
+                        if files:
+                            filepath = os.path.join(temp_dir, files[0])
+                            return filepath, None
+                            
+                except Exception as ff_error:
+                    logger.warning(f"Firefox cookies failed: {ff_error}")
+                    
+                    # Try without cookies but with different settings
+                    try:
+                        del ydl_opts['cookiesfrombrowser']
+                        ydl_opts['extractor_args']['youtube']['player_client'] = ['android']
+                        ydl_opts['format'] = 'worst[height>=240]/worst' if format_type == 'video' else 'worstaudio/worst'
+                        
+                        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                            logger.info("Trying without cookies (Android client, low quality)...")
+                            ydl.download([clean_url])
+                            
+                            files = [f for f in os.listdir(temp_dir) if os.path.isfile(os.path.join(temp_dir, f))]
+                            if files:
+                                filepath = os.path.join(temp_dir, files[0])
+                                return filepath, None
+                                
+                    except Exception as no_cookie_error:
+                        logger.error(f"All methods failed: {no_cookie_error}")
+                        return None, "❌ YouTube bot detection active. All bypass methods failed."
+                        
+        except Exception as e:
+            logger.error(f"yt-dlp error: {e}")
             error_str = str(e).lower()
             
-            if 'private video' in error_str:
+            if 'sign in to confirm' in error_str or 'bot' in error_str:
+                return None, "❌ YouTube bot detection. Try using a VPN or different IP address."
+            elif 'private video' in error_str:
                 return None, "❌ Private video"
             elif 'video unavailable' in error_str:
                 return None, "❌ Video unavailable"
             elif 'age restricted' in error_str:
                 return None, "❌ Age-restricted video"
-            elif 'premieres in' in error_str:
-                return None, "❌ Video hasn't premiered yet"
-            elif 'live event' in error_str:
-                return None, "❌ Live streams not supported"
-            elif '403' in error_str:
-                return None, "❌ Access forbidden (region/country block)"
-            elif '404' in error_str:
-                return None, "❌ Video not found"
             else:
-                return None, f"❌ Download failed: {str(e)[:100]}"
-                
-        except Exception as e:
-            logger.error(f"yt-dlp error: {e}")
-            return None, f"❌ Error: {str(e)[:100]}"
+                return None, f"❌ Error: {str(e)[:100]}"
     
     async def download_youtube(self, url, format_type):
         """Main YouTube download method"""
         logger.info(f"Downloading YouTube {format_type}: {url}")
-        return await self.download_youtube_simple(url, format_type)
+        return await self.download_youtube_with_cookies(url, format_type)
     
     async def download_instagram_simple(self, url, format_type):
         """Simple Instagram downloader using direct web scraping"""
@@ -474,6 +508,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 Send me a URL and choose format.
 
 ⚠️ <b>Limit:</b> {MAX_FILE_SIZE // (1024*1024)}MB max file size.
+
+ℹ️ <b>Note:</b> For YouTube, the bot uses browser cookies to bypass restrictions. Make sure Chrome or Firefox is installed.
     """
     await update.message.reply_text(welcome_text, parse_mode='HTML')
 
