@@ -500,7 +500,6 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = urls[0]
     
     if not bot.is_supported_url(url):
-        await update.message.reply_text("❌ Platform not supported. Supported: YouTube, Twitter/X, Instagram, SoundCloud")
         return
     
     platform = bot.get_platform_name(url)
