@@ -7,6 +7,7 @@ import re
 import json
 from urllib.parse import urlparse
 from dotenv import load_dotenv
+import os
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
