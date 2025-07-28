@@ -118,7 +118,12 @@ class MediaDownloaderBot:
             "quiet": False,
             "extractor_args": {
             # note: this is one string, not a dict
-                "youtube": "player_client=mweb,web;fetch_pot=auto;player_skip=configs"
+            "youtube": {
+                # each option as its own string value
+                "player_client": "mweb,web",
+                "fetch_pot": "auto",
+                "player_skip": "configs",
+              }            
             }
         }
 
