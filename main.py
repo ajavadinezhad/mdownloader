@@ -143,8 +143,24 @@ class MediaDownloaderBot:
         try:
             logger.info(f"🎬 YouTube download with PyTubeFix: {url}")
             
-            # Create YouTube object
-            yt = YouTube(url)
+            # Clean URL for better compatibility
+            clean_url = url
+            if 'shorts/' in url:
+                # Convert YouTube Shorts URL to regular format
+                import re
+                video_id_match = re.search(r'/shorts/([A-Za-z0-9_-]+)', url)
+                if video_id_match:
+                    video_id = video_id_match.group(1)
+                    clean_url = f"https://www.youtube.com/watch?v={video_id}"
+                    logger.info(f"🔄 Converted Shorts URL to: {clean_url}")
+            
+            # Create YouTube object with better error handling
+            try:
+                yt = YouTube(clean_url, use_oauth=False, allow_oauth_cache=False)
+            except Exception as e:
+                logger.warning(f"First attempt failed: {e}")
+                # Try with original URL
+                yt = YouTube(url, use_oauth=False, allow_oauth_cache=False)
             
             # Get video info
             title = yt.title
@@ -252,7 +268,7 @@ class MediaDownloaderBot:
                     return None, f"❌ Video download failed: {str(e)[:100]}"
         
         except VideoUnavailable:
-            return None, "❌ YouTube video is unavailable or private"
+            return None, "❌ YouTube video is unavailable, private, or deleted"
         except AgeRestrictedError:
             return None, "❌ Age-restricted content cannot be downloaded"
         except VideoPrivate:
@@ -263,12 +279,16 @@ class MediaDownloaderBot:
             error_msg = str(e).lower()
             logger.error(f"PyTubeFix error: {e}")
             
-            if 'regex' in error_msg or 'extract' in error_msg:
-                return None, "❌ YouTube changed their system. Try again later or use different content"
-            elif 'unavailable' in error_msg:
-                return None, "❌ Video unavailable. May be deleted or region-blocked"
+            if 'regex' in error_msg or 'extract' in error_msg or 'cipher' in error_msg:
+                return None, "❌ YouTube changed their system. Trying fallback method..."
+            elif 'unavailable' in error_msg or 'not found' in error_msg:
+                return None, "❌ Video unavailable. May be deleted, private, or region-blocked"
             elif 'private' in error_msg:
                 return None, "❌ This video is private"
+            elif 'sign in' in error_msg or 'login' in error_msg:
+                return None, "❌ This video requires login to view"
+            elif 'restricted' in error_msg:
+                return None, "❌ Video is restricted in your region"
             else:
                 return None, f"❌ YouTube error: {str(e)[:100]}"
     
@@ -525,10 +545,18 @@ class MediaDownloaderBot:
         """Download media - route to appropriate downloader"""
         platform_name = self.get_platform_name(url)
         
-        # Use PyTubeFix for YouTube
+        # Use PyTubeFix for YouTube with fallback to yt-dlp
         if any(platform in url.lower() for platform in ['youtube.com', 'youtu.be']):
             logger.info(f"🎬 {platform_name} detected - using PyTubeFix")
-            return await self.download_youtube_with_pytubefix(url, format_type)
+            filepath, error = await self.download_youtube_with_pytubefix(url, format_type)
+            
+            # If PyTubeFix fails, try yt-dlp as fallback
+            if error and ("changed their system" in error or "cipher" in error or "extract" in error):
+                logger.warning(f"PyTubeFix failed: {error}")
+                logger.info(f"🔄 Trying yt-dlp fallback for {platform_name}")
+                return await self.download_youtube_with_ytdlp_fallback(url, format_type)
+            
+            return filepath, error
         
         # Use instaloader for Instagram
         elif 'instagram.com' in url.lower():
@@ -539,6 +567,73 @@ class MediaDownloaderBot:
         else:
             logger.info(f"🌐 {platform_name} detected - using yt-dlp")
             return await self.download_with_ytdlp(url, format_type, platform_name)
+    
+    async def download_youtube_with_ytdlp_fallback(self, url, format_type):
+        """Fallback YouTube downloader using yt-dlp"""
+        temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
+        
+        try:
+            logger.info(f"🔄 YouTube fallback with yt-dlp: {url}")
+            
+            # Base options for YouTube
+            base_opts = {
+                'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
+                'noplaylist': True,
+                'retries': 3,
+                'fragment_retries': 3,
+                'writesubtitles': False,
+                'writeautomaticsub': False,
+                'ignoreerrors': False,
+            }
+            
+            if format_type == 'audio':
+                base_opts.update({
+                    'format': 'bestaudio/best',
+                    'extractaudio': True,
+                    'audioformat': 'mp3',
+                    'audioquality': '192',
+                })
+            else:
+                base_opts.update({
+                    'format': 'best[height<=720]/best[height<=480]/best',
+                })
+            
+            # Add user agent
+            base_opts['http_headers'] = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+            
+            with yt_dlp.YoutubeDL(base_opts) as ydl:
+                try:
+                    # Extract info first
+                    info = ydl.extract_info(url, download=False)
+                    title = info.get('title', 'Unknown')
+                    
+                    # Check file size
+                    filesize = info.get('filesize') or info.get('filesize_approx', 0)
+                    max_size_mb = MAX_FILE_SIZE // (1024 * 1024)
+                    if filesize and filesize > MAX_FILE_SIZE:
+                        return None, f"❌ File too large ({filesize // (1024*1024)}MB). Telegram limit is {max_size_mb}MB."
+                    
+                    # Download
+                    ydl.download([url])
+                    
+                    # Find downloaded file
+                    files = os.listdir(temp_dir)
+                    if files:
+                        filepath = os.path.join(temp_dir, files[0])
+                        logger.info(f"✅ YouTube fallback download success")
+                        return filepath, None
+                    else:
+                        return None, "❌ Fallback download failed - no file created"
+                        
+                except Exception as e:
+                    logger.error(f"yt-dlp fallback error: {e}")
+                    return None, f"❌ Both PyTubeFix and yt-dlp failed. Video may be unavailable."
+                    
+        except Exception as e:
+            logger.error(f"Fallback method error: {e}")
+            return None, f"❌ Fallback download failed: {str(e)[:100]}"
 
 # Initialize bot
 bot = MediaDownloaderBot()
@@ -619,14 +714,14 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]
         format_text = "Choose download format:"
     elif any(platform in url.lower() for platform in ['youtube.com', 'youtu.be']):
-        # YouTube - PyTubeFix powered
+        # YouTube - PyTubeFix powered with yt-dlp fallback
         keyboard = [
             [
-                InlineKeyboardButton("🎥 Video (PyTubeFix)", callback_data=f"video|{url_id}"),
-                InlineKeyboardButton("🎵 Audio (PyTubeFix)", callback_data=f"audio|{url_id}")
+                InlineKeyboardButton("🎥 Video (Smart)", callback_data=f"video|{url_id}"),
+                InlineKeyboardButton("🎵 Audio (Smart)", callback_data=f"audio|{url_id}")
             ]
         ]
-        format_text = "Choose download format (PyTubeFix powered - fast & reliable):"
+        format_text = "Choose download format (PyTubeFix + yt-dlp fallback):"
     elif 'instagram.com' in url.lower():
         # Instagram - using instaloader
         keyboard = [
@@ -679,7 +774,7 @@ async def handle_format_selection(update: Update, context: ContextTypes.DEFAULT_
     if platform == 'Instagram':
         download_msg = f"{format_emoji} Downloading {format_type} from {platform} (Instaloader)...\n\n⏳ Using specialized Instagram downloader for better reliability."
     elif platform == 'YouTube':
-        download_msg = f"{format_emoji} Downloading {format_type} from {platform} (PyTubeFix)...\n\n⏳ Using fast Python library - no external dependencies needed!"
+        download_msg = f"{format_emoji} Downloading {format_type} from {platform} (Smart Method)...\n\n⏳ Using PyTubeFix with yt-dlp fallback for maximum reliability!"
     else:
         download_msg = f"{format_emoji} Downloading {format_type} from {platform}...\n\n⏳ This may take a moment depending on file size."
     
