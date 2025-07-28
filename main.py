@@ -5,18 +5,15 @@ import shutil
 import subprocess
 import re
 import json
+import os
 from urllib.parse import urlparse
 from dotenv import load_dotenv
-import os
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 import yt_dlp
 import requests
 import instaloader
-from pytubefix import YouTube
-from pytubefix.cli import on_progress
-from pytubefix.exceptions import VideoUnavailable, AgeRestrictedError, VideoPrivate, MembersOnly
 
 # Load environment variables
 load_dotenv()
@@ -42,11 +39,11 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 class MediaDownloaderBot:
     def __init__(self):
         self.supported_platforms = {
-           #'youtube.com': 'YouTube',
-           #'youtu.be': 'YouTube',
+           'youtube.com': 'YouTube',
+           'youtu.be': 'YouTube',
             'twitter.com': 'Twitter/X',
             'x.com': 'Twitter/X',
-           #'instagram.com': 'Instagram',
+           'instagram.com': 'Instagram',
             'soundcloud.com': 'SoundCloud',
         }
         self.url_cache = {}
@@ -69,6 +66,22 @@ class MediaDownloaderBot:
                 domain = domain[4:]
             return any(platform in domain for platform in self.supported_platforms.keys())
         except:
+            pass
+
+def main():
+    logger.info("🤖 Starting Media Downloader Bot...")
+    
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
+    application.add_handler(CallbackQueryHandler(handle_format_selection))
+    
+    logger.info("🚀 Bot is running!")
+    application.run_polling(drop_pending_updates=True)
+
+if __name__ == '__main__':
+    main()
             return False
     
     def store_url(self, url, user_id):
@@ -98,142 +111,251 @@ class MediaDownloaderBot:
         except:
             return "Unknown"
     
-    async def download_youtube(self, url, format_type):
+    async def download_youtube_improved(self, url, format_type):
+        """Improved YouTube downloader with multiple fallback methods"""
         temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
         
+        # Clean URL first
+        clean_url = url
+        if 'shorts/' in url:
+            video_id_match = re.search(r'/shorts/([A-Za-z0-9_-]+)', url)
+            if video_id_match:
+                video_id = video_id_match.group(1)
+                clean_url = f"https://www.youtube.com/watch?v={video_id}"
+                logger.info(f"Converted Shorts URL: {clean_url}")
+        
+        # Method 1: Try yt-dlp first (most reliable)
+        logger.info("Trying yt-dlp method...")
         try:
-            # Convert Shorts URL to regular format
-            clean_url = url
-            if 'shorts/' in url:
-                video_id_match = re.search(r'/shorts/([A-Za-z0-9_-]+)', url)
-                if video_id_match:
-                    video_id = video_id_match.group(1)
-                    clean_url = f"https://www.youtube.com/watch?v={video_id}"
-                    logger.info(f"Converted Shorts URL: {clean_url}")
-            
-            # Try multiple approaches for better success rate
-            try:
-                # First attempt - simple approach
-                yt = YouTube(clean_url)
-                logger.info(f"YouTube object created successfully for: {yt.title}")
-            except Exception as e1:
-                logger.warning(f"First attempt failed: {e1}")
-                try:
-                    # Second attempt with different user agent
-                    yt = YouTube(clean_url, client='WEB')
-                    logger.info(f"Second attempt with WEB client succeeded for: {yt.title}")
-                except Exception as e2:
-                    logger.warning(f"Second attempt failed: {e2}")
-                    try:
-                        # Third attempt with original URL
-                        yt = YouTube(url)
-                        logger.info(f"Third attempt with original URL succeeded for: {yt.title}")
-                    except Exception as e3:
-                        logger.warning(f"Third attempt failed: {e3}")
-                        try:
-                            # Fourth attempt - bypass some restrictions
-                            yt = YouTube(clean_url, use_oauth=False, allow_oauth_cache=False)
-                            logger.info(f"Fourth attempt succeeded for: {yt.title}")
-                        except Exception as e4:
-                            logger.error(f"All attempts failed. Last error: {e4}")
-                            # Check if it's a bot detection issue
-                            if 'po_token' in str(e4) or 'bot' in str(e4).lower():
-                                raise Exception("YouTube bot detection - video may be restricted or require different access method")
-                            else:
-                                raise e4
-            
-            title = yt.title
+            return await self._download_with_ytdlp_youtube(clean_url, format_type, temp_dir)
+        except Exception as e:
+            logger.warning(f"yt-dlp method failed: {e}")
+        
+        # Method 2: Try yt-dlp with different extractors
+        logger.info("Trying yt-dlp with different extractors...")
+        try:
+            return await self._download_with_ytdlp_alternative(clean_url, format_type, temp_dir)
+        except Exception as e:
+            logger.warning(f"yt-dlp alternative method failed: {e}")
+        
+        # Method 3: Try cobalt.tools API
+        logger.info("Trying cobalt.tools API...")
+        try:
+            return await self._download_with_cobalt(clean_url, format_type, temp_dir)
+        except Exception as e:
+            logger.warning(f"Cobalt API method failed: {e}")
+        
+        # Method 4: Try y2mate API (if available)
+        logger.info("Trying y2mate-like service...")
+        try:
+            return await self._download_with_web_service(clean_url, format_type, temp_dir)
+        except Exception as e:
+            logger.warning(f"Web service method failed: {e}")
+        
+        # All methods failed
+        return None, "❌ All YouTube download methods failed. YouTube may have updated their system."
+    
+    async def _download_with_ytdlp_youtube(self, url, format_type, temp_dir):
+        """Primary yt-dlp method with optimized settings"""
+        opts = {
+            'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
+            'noplaylist': True,
+            'retries': 5,
+            'fragment_retries': 5,
+            'skip_unavailable_fragments': True,
+            'keepvideo': False,
+            'no_warnings': False,
+            'extract_flat': False,
+            'writethumbnail': False,
+            'writeinfojson': False,
+            # Add cookies and headers to avoid bot detection
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+            }
+        }
+        
+        if format_type == 'audio':
+            opts.update({
+                'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }]
+            })
+        else:
+            # For video, prefer formats that work well
+            opts['format'] = 'best[height<=720][ext=mp4]/best[height<=720]/best[ext=mp4]/best'
+        
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            # First get info to check file size
+            info = ydl.extract_info(url, download=False)
+            title = info.get('title', 'Unknown')
             logger.info(f"Video title: {title}")
-            logger.info(f"Video length: {yt.length} seconds")
-            
-            if format_type == 'audio':
-                # Get audio-only stream
-                stream = yt.streams.get_audio_only()
-                if not stream:
-                    # Try alternative audio streams
-                    stream = yt.streams.filter(only_audio=True).order_by('abr').desc().first()
-                if not stream:
-                    logger.error("No audio streams found")
-                    return None, "❌ No audio stream available"
-                logger.info(f"Selected audio stream: {stream.mime_type}, {stream.abr}")
-            else:
-                # Get video stream
-                stream = yt.streams.get_highest_resolution()
-                if not stream:
-                    # Try progressive streams
-                    stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
-                if not stream:
-                    # Try any video stream
-                    stream = yt.streams.filter(adaptive=False).first()
-                if not stream:
-                    logger.error("No video streams found")
-                    return None, "❌ No video stream available"
-                logger.info(f"Selected video stream: {stream.mime_type}, {stream.resolution}")
             
             # Check file size
-            if stream.filesize:
-                size_mb = stream.filesize // (1024 * 1024)
-                max_mb = MAX_FILE_SIZE // (1024 * 1024)
-                logger.info(f"File size: {size_mb}MB")
-                if stream.filesize > MAX_FILE_SIZE:
-                    return None, f"❌ File too large ({size_mb}MB). Limit: {max_mb}MB"
+            filesize = info.get('filesize') or info.get('filesize_approx', 0)
+            if filesize and filesize > MAX_FILE_SIZE:
+                return None, f"❌ File too large ({filesize // (1024*1024)}MB). Limit: {MAX_FILE_SIZE // (1024*1024)}MB"
+            
+            # Download
+            ydl.download([url])
+            
+            # Find downloaded file
+            files = [f for f in os.listdir(temp_dir) if os.path.isfile(os.path.join(temp_dir, f))]
+            if files:
+                filepath = os.path.join(temp_dir, files[0])
+                # Double-check file size
+                actual_size = os.path.getsize(filepath)
+                if actual_size > MAX_FILE_SIZE:
+                    return None, f"❌ File too large ({actual_size // (1024*1024)}MB)"
+                return filepath, None
             else:
-                logger.warning("File size unknown")
+                return None, "❌ Download completed but file not found"
+    
+    async def _download_with_ytdlp_alternative(self, url, format_type, temp_dir):
+        """Alternative yt-dlp method with different settings"""
+        opts = {
+            'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
+            'noplaylist': True,
+            'retries': 3,
+            'ignoreerrors': False,
+            # Use different extractor options
+            'extractor_args': {
+                'youtube': {
+                    'skip': ['dash', 'hls'],  # Skip DASH and HLS formats that might cause issues
+                    'player_client': ['android', 'web'],  # Try different clients
+                }
+            },
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
+            }
+        }
+        
+        if format_type == 'audio':
+            opts['format'] = 'worstaudio/worst'  # Sometimes worst quality works when best doesn't
+            opts['postprocessors'] = [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '128',  # Lower quality for better compatibility
+            }]
+        else:
+            opts['format'] = 'worst[height>=360]/worst'  # Lower quality for better success rate
+        
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            filesize = info.get('filesize') or info.get('filesize_approx', 0)
+            if filesize and filesize > MAX_FILE_SIZE:
+                return None, f"❌ File too large"
             
-            # Download with pytubefix
-            safe_title = re.sub(r'[^\w\s-]', '', title)[:50]
-            filename = f"{safe_title}_{format_type}"
+            ydl.download([url])
             
-            logger.info(f"Starting download to: {temp_dir}")
-            filepath = stream.download(output_path=temp_dir, filename=filename)
-            logger.info(f"Download completed: {filepath}")
+            files = [f for f in os.listdir(temp_dir) if os.path.isfile(os.path.join(temp_dir, f))]
+            if files:
+                return os.path.join(temp_dir, files[0]), None
+            else:
+                return None, "❌ Alternative method failed"
+    
+    async def _download_with_cobalt(self, url, format_type, temp_dir):
+        """Try using cobalt.tools API as fallback"""
+        try:
+            api_url = "https://co.wuk.sh/api/json"
             
-            # Convert to MP3 if audio and ffmpeg available
-            if format_type == 'audio' and not filepath.endswith('.mp3'):
-                mp3_filepath = os.path.join(temp_dir, f"{safe_title}_audio.mp3")
-                try:
-                    logger.info("Converting to MP3...")
-                    cmd = ['ffmpeg', '-i', filepath, '-vn', '-acodec', 'mp3', '-ab', '192k', mp3_filepath, '-y']
-                    result = subprocess.run(cmd, capture_output=True, timeout=60)
-                    if result.returncode == 0 and os.path.exists(mp3_filepath):
-                        os.remove(filepath)
-                        filepath = mp3_filepath
-                        logger.info("MP3 conversion successful")
+            headers = {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            data = {
+                "url": url,
+                "vCodec": "h264",
+                "vQuality": "720",
+                "aFormat": "mp3" if format_type == 'audio' else "best",
+                "isAudioOnly": format_type == 'audio'
+            }
+            
+            response = requests.post(api_url, json=data, headers=headers, timeout=30)
+            
+            if response.status_code == 200:
+                result = response.json()
+                
+                if result.get('status') == 'success' or result.get('status') == 'redirect':
+                    download_url = result.get('url')
+                    if download_url:
+                        # Download the file
+                        file_response = requests.get(download_url, stream=True, timeout=60)
+                        file_response.raise_for_status()
+                        
+                        # Determine filename
+                        content_type = file_response.headers.get('content-type', '')
+                        if format_type == 'audio' or 'audio' in content_type:
+                            filename = "youtube_audio.mp3"
+                        else:
+                            filename = "youtube_video.mp4"
+                        
+                        filepath = os.path.join(temp_dir, filename)
+                        
+                        # Download with size check
+                        total_size = 0
+                        with open(filepath, 'wb') as f:
+                            for chunk in file_response.iter_content(chunk_size=8192):
+                                if chunk:
+                                    total_size += len(chunk)
+                                    if total_size > MAX_FILE_SIZE:
+                                        return None, "❌ File too large"
+                                    f.write(chunk)
+                        
+                        return filepath, None
                     else:
-                        logger.warning("MP3 conversion failed, using original format")
-                except Exception as conv_error:
-                    logger.warning(f"MP3 conversion error: {conv_error}")
-            
-            return filepath, None
-            
-        except VideoUnavailable as e:
-            logger.error(f"Video unavailable: {e}")
-            return None, "❌ Video unavailable, deleted, or region-blocked"
-        except AgeRestrictedError as e:
-            logger.error(f"Age restricted: {e}")
-            return None, "❌ Age-restricted content cannot be downloaded"
-        except VideoPrivate as e:
-            logger.error(f"Video private: {e}")
-            return None, "❌ Private video"
-        except MembersOnly as e:
-            logger.error(f"Members only: {e}")
-            return None, "❌ Members-only content"
+                        return None, "❌ Cobalt API: No download URL received"
+                else:
+                    error_msg = result.get('text', 'Unknown error')
+                    return None, f"❌ Cobalt API: {error_msg}"
+            else:
+                return None, f"❌ Cobalt API returned status {response.status_code}"
+                
+        except requests.RequestException as e:
+            return None, f"❌ Cobalt API network error: {str(e)[:50]}"
         except Exception as e:
-            logger.error(f"YouTube download error: {e}")
-            error_msg = str(e).lower()
+            return None, f"❌ Cobalt API error: {str(e)[:50]}"
+    
+    async def _download_with_web_service(self, url, format_type, temp_dir):
+        """Try using a web-based YouTube downloader service"""
+        try:
+            # Extract video ID
+            video_id_match = re.search(r'(?:v=|/)([A-Za-z0-9_-]{11})', url)
+            if not video_id_match:
+                return None, "❌ Could not extract video ID"
             
-            if 'regex' in error_msg or 'extract' in error_msg:
-                return None, "❌ YouTube changed their system. Try a different video or wait for PyTubeFix update."
-            elif 'unavailable' in error_msg or 'not found' in error_msg:
-                return None, "❌ Video not found or unavailable in your region"
-            elif 'private' in error_msg:
-                return None, "❌ This video is private"
-            elif 'sign in' in error_msg or 'login' in error_msg:
-                return None, "❌ This video requires sign-in to view"
-            elif 'po_token' in error_msg or 'bot' in error_msg:
-                return None, "❌ YouTube detected automated access. This video may be restricted. Try a different video."
-            elif 'restricted' in error_msg:
-                return None, "❌ Video restricted in your region or age-restricted"
+            video_id = video_id_match.group(1)
+            
+            # Try a simple YouTube info API (this is a basic example)
+            # Note: You might need to find working APIs or implement your own
+            info_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+            
+            response = requests.get(info_url, timeout=10)
+            if response.status_code == 200:
+                info = response.json()
+                title = info.get('title', 'Unknown')
+                logger.info(f"Found video: {title}")
+                
+                # This is a placeholder - you'd need to implement actual download logic
+                # using working YouTube download services or APIs
+                return None, "❌ Web service method not fully implemented"
+            else:
+                return None, "❌ Could not get video info"
+                
+        except Exception as e:
+            return None, f"❌ Web service error: {str(e)[:50]}"
+    
+    async def download_youtube(self, url, format_type):
+        """Main YouTube download method - now uses improved version"""
+        return await self.download_youtube_improved(url, format_type)
     
     async def download_instagram_simple(self, url, format_type):
         """Simple Instagram downloader using direct web scraping"""
@@ -580,19 +702,4 @@ async def handle_format_selection(update: Update, context: ContextTypes.DEFAULT_
                 if temp_dir and os.path.exists(temp_dir):
                     shutil.rmtree(temp_dir, ignore_errors=True)
         except:
-            pass
-
-def main():
-    logger.info("🤖 Starting Media Downloader Bot...")
-    
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
-    application.add_handler(CallbackQueryHandler(handle_format_selection))
-    
-    logger.info("🚀 Bot is running!")
-    application.run_polling(drop_pending_updates=True)
-
-if __name__ == '__main__':
-    main()
+            logger.error("Failed to clean up temporary files")
