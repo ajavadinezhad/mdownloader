@@ -1,4 +1,5 @@
-import os
+else:
+                return None, f"❌ Download failed. Try a different YouTube video."import os
 import asyncio
 import logging
 import tempfile
@@ -113,30 +114,34 @@ class MediaDownloaderBot:
             
             # Try multiple approaches for better success rate
             try:
-                # First attempt with po_token for bot detection bypass
-                yt = YouTube(clean_url, use_po_token=True)
+                # First attempt - simple approach
+                yt = YouTube(clean_url)
                 logger.info(f"YouTube object created successfully for: {yt.title}")
             except Exception as e1:
-                logger.warning(f"First attempt with po_token failed: {e1}")
+                logger.warning(f"First attempt failed: {e1}")
                 try:
-                    # Second attempt with client override
+                    # Second attempt with different user agent
                     yt = YouTube(clean_url, client='WEB')
                     logger.info(f"Second attempt with WEB client succeeded for: {yt.title}")
                 except Exception as e2:
                     logger.warning(f"Second attempt failed: {e2}")
                     try:
-                        # Third attempt with original URL and po_token
-                        yt = YouTube(url, use_po_token=True)
-                        logger.info(f"Third attempt succeeded for: {yt.title}")
+                        # Third attempt with original URL
+                        yt = YouTube(url)
+                        logger.info(f"Third attempt with original URL succeeded for: {yt.title}")
                     except Exception as e3:
                         logger.warning(f"Third attempt failed: {e3}")
                         try:
-                            # Fourth attempt - minimal options
-                            yt = YouTube(clean_url)
+                            # Fourth attempt - bypass some restrictions
+                            yt = YouTube(clean_url, use_oauth=False, allow_oauth_cache=False)
                             logger.info(f"Fourth attempt succeeded for: {yt.title}")
                         except Exception as e4:
                             logger.error(f"All attempts failed. Last error: {e4}")
-                            raise e4
+                            # Check if it's a bot detection issue
+                            if 'po_token' in str(e4) or 'bot' in str(e4).lower():
+                                raise Exception("YouTube bot detection - video may be restricted or require different access method")
+                            else:
+                                raise e4
             
             title = yt.title
             logger.info(f"Video title: {title}")
@@ -226,10 +231,10 @@ class MediaDownloaderBot:
                 return None, "❌ This video is private"
             elif 'sign in' in error_msg or 'login' in error_msg:
                 return None, "❌ This video requires sign-in to view"
+            elif 'po_token' in error_msg or 'bot' in error_msg:
+                return None, "❌ YouTube detected automated access. This video may be restricted. Try a different video."
             elif 'restricted' in error_msg:
                 return None, "❌ Video restricted in your region or age-restricted"
-            else:
-                return None, f"❌ Download failed. Try a different YouTube video."
     
     async def download_instagram_simple(self, url, format_type):
         """Simple Instagram downloader using direct web scraping"""
