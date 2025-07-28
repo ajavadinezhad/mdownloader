@@ -499,9 +499,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 🎬 <b>Media Downloader Bot</b>
 
 📱 <b>Supported:</b>
-• YouTube (videos & audio)
 • Twitter/X (videos)
-• Instagram (posts & reels)
 • SoundCloud (audio)
 
 📝 <b>Usage:</b>
