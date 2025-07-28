@@ -15,7 +15,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 import yt_dlp
 import requests
 import instaloader
-from pytube import YouTube
+import youtube_dl
 
 # Load environment variables
 load_dotenv()
@@ -96,8 +96,8 @@ class MediaDownloaderBot:
         except:
             return "Unknown"
     
-    async def download_youtube_pytube(self, url, format_type):
-        """Use pytube library for YouTube downloads"""
+    async def download_youtube_youtube_dl(self, url, format_type):
+        """Use original youtube-dl for YouTube downloads"""
         temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
         
         try:
@@ -110,167 +110,132 @@ class MediaDownloaderBot:
                     clean_url = f"https://www.youtube.com/watch?v={video_id}"
                     logger.info(f"Converted Shorts URL: {clean_url}")
             
-            logger.info(f"Using pytube for: {clean_url}")
+            logger.info(f"Using youtube-dl for: {clean_url}")
             
-            # Create YouTube object
-            yt = YouTube(clean_url)
-            
-            # Get video info
-            title = yt.title
-            logger.info(f"Video title: {title}")
-            logger.info(f"Video length: {yt.length} seconds")
-            
-            # Clean title for filename
-            safe_title = re.sub(r'[^\w\s-]', '', title)[:50]
+            # Configure youtube-dl options
+            ydl_opts = {
+                'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
+                'noplaylist': True,
+                'retries': 5,
+                'fragment_retries': 5,
+                'socket_timeout': 60,
+                'quiet': False,
+                'no_warnings': False,
+                'extract_flat': False,
+                'writethumbnail': False,
+                'writeinfojson': False,
+                # Add user agent and headers to avoid blocking
+                'http_headers': {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                },
+                # Use specific extractors
+                'extractor_args': {
+                    'youtube': {
+                        'skip': ['dash'],  # Skip DASH formats that might cause issues
+                    }
+                }
+            }
             
             if format_type == 'audio':
-                # Get audio stream
-                logger.info("Getting audio stream...")
-                audio_stream = yt.streams.filter(only_audio=True).first()
-                
-                if not audio_stream:
-                    return None, "❌ No audio stream available"
-                
-                logger.info(f"Audio stream: {audio_stream.mime_type}, {audio_stream.abr}")
-                
-                # Check file size estimate
-                if audio_stream.filesize:
-                    size_mb = audio_stream.filesize // (1024 * 1024)
-                    if audio_stream.filesize > MAX_FILE_SIZE:
-                        return None, f"❌ File too large ({size_mb}MB)"
-                    logger.info(f"Estimated file size: {size_mb}MB")
-                
-                # Download audio
-                logger.info("Downloading audio...")
-                audio_file = audio_stream.download(
-                    output_path=temp_dir,
-                    filename=f"{safe_title}_audio"
-                )
-                
-                # Convert to MP3 if needed
-                if not audio_file.endswith('.mp3'):
-                    mp3_file = os.path.join(temp_dir, f"{safe_title}_audio.mp3")
-                    try:
-                        logger.info("Converting to MP3...")
-                        cmd = [
-                            'ffmpeg', '-i', audio_file, 
-                            '-vn', '-acodec', 'mp3', '-ab', '192k', 
-                            mp3_file, '-y'
-                        ]
-                        result = subprocess.run(cmd, capture_output=True, timeout=120)
-                        
-                        if result.returncode == 0 and os.path.exists(mp3_file):
-                            os.remove(audio_file)
-                            audio_file = mp3_file
-                            logger.info("MP3 conversion successful")
-                        else:
-                            logger.warning("MP3 conversion failed, using original format")
-                    except Exception as conv_error:
-                        logger.warning(f"MP3 conversion error: {conv_error}")
-                
-                return audio_file, None
-                
+                ydl_opts.update({
+                    'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
+                    'postprocessors': [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                        'preferredquality': '192',
+                    }]
+                })
             else:
-                # Get video stream
-                logger.info("Getting video stream...")
-                
-                # Try progressive streams first (video+audio combined)
-                video_stream = yt.streams.filter(
-                    progressive=True, 
-                    file_extension='mp4'
-                ).order_by('resolution').desc().first()
-                
-                if not video_stream:
-                    # If no progressive, try adaptive video streams
-                    video_stream = yt.streams.filter(
-                        adaptive=True, 
-                        file_extension='mp4',
-                        type='video'
-                    ).order_by('resolution').desc().first()
-                
-                if not video_stream:
-                    # Last resort - any video stream
-                    video_stream = yt.streams.filter(type='video').first()
-                
-                if not video_stream:
-                    return None, "❌ No video stream available"
-                
-                logger.info(f"Video stream: {video_stream.mime_type}, {video_stream.resolution}")
-                
-                # Check file size
-                if video_stream.filesize:
-                    size_mb = video_stream.filesize // (1024 * 1024)
-                    if video_stream.filesize > MAX_FILE_SIZE:
-                        return None, f"❌ File too large ({size_mb}MB)"
-                    logger.info(f"Estimated file size: {size_mb}MB")
-                
-                # Download video
-                logger.info("Downloading video...")
-                video_file = video_stream.download(
-                    output_path=temp_dir,
-                    filename=f"{safe_title}_video"
-                )
-                
-                # If adaptive stream (video only), need to merge with audio
-                if video_stream.adaptive:
-                    logger.info("Adaptive stream detected, getting audio...")
-                    audio_stream = yt.streams.filter(only_audio=True).first()
+                # For video, try different format selectors
+                ydl_opts['format'] = 'best[height<=720][ext=mp4]/best[height<=720]/best[ext=mp4]/best'
+            
+            # Create youtube-dl object
+            with youtube_dl.YoutubeDL(ydl_opts) as ydl:
+                # First, extract info to check file size
+                logger.info("Extracting video info...")
+                try:
+                    info = ydl.extract_info(clean_url, download=False)
                     
-                    if audio_stream:
-                        audio_file = audio_stream.download(
-                            output_path=temp_dir,
-                            filename=f"{safe_title}_audio_temp"
-                        )
-                        
-                        # Merge video and audio with ffmpeg
-                        merged_file = os.path.join(temp_dir, f"{safe_title}_merged.mp4")
-                        try:
-                            logger.info("Merging video and audio...")
-                            cmd = [
-                                'ffmpeg', '-i', video_file, '-i', audio_file,
-                                '-c:v', 'copy', '-c:a', 'aac', '-strict', 'experimental',
-                                merged_file, '-y'
-                            ]
-                            result = subprocess.run(cmd, capture_output=True, timeout=180)
-                            
-                            if result.returncode == 0 and os.path.exists(merged_file):
-                                os.remove(video_file)
-                                os.remove(audio_file)
-                                video_file = merged_file
-                                logger.info("Video/audio merge successful")
-                            else:
-                                logger.warning("Merge failed, using video-only")
-                                if os.path.exists(audio_file):
-                                    os.remove(audio_file)
-                        except Exception as merge_error:
-                            logger.warning(f"Merge error: {merge_error}")
-                            if os.path.exists(audio_file):
-                                os.remove(audio_file)
+                    title = info.get('title', 'Unknown')
+                    duration = info.get('duration', 0)
+                    filesize = info.get('filesize') or info.get('filesize_approx', 0)
+                    
+                    logger.info(f"Video title: {title}")
+                    logger.info(f"Duration: {duration} seconds")
+                    
+                    # Check file size
+                    if filesize and filesize > MAX_FILE_SIZE:
+                        size_mb = filesize // (1024 * 1024)
+                        max_mb = MAX_FILE_SIZE // (1024 * 1024)
+                        return None, f"❌ File too large ({size_mb}MB). Limit: {max_mb}MB"
+                    
+                    if filesize:
+                        logger.info(f"Estimated file size: {filesize // (1024 * 1024)}MB")
                 
-                return video_file, None
+                except Exception as info_error:
+                    logger.warning(f"Could not extract info: {info_error}")
+                    # Continue with download anyway
+                
+                # Download the video
+                logger.info("Starting download...")
+                ydl.download([clean_url])
+                
+                # Find downloaded file
+                files = [f for f in os.listdir(temp_dir) if os.path.isfile(os.path.join(temp_dir, f))]
+                
+                if files:
+                    filepath = os.path.join(temp_dir, files[0])
+                    
+                    # Double-check file size after download
+                    actual_size = os.path.getsize(filepath)
+                    if actual_size > MAX_FILE_SIZE:
+                        size_mb = actual_size // (1024 * 1024)
+                        max_mb = MAX_FILE_SIZE // (1024 * 1024)
+                        return None, f"❌ Downloaded file too large ({size_mb}MB). Limit: {max_mb}MB"
+                    
+                    logger.info(f"Download successful: {filepath} ({actual_size // (1024*1024)}MB)")
+                    return filepath, None
+                else:
+                    return None, "❌ Download completed but no file found"
+                    
+        except youtube_dl.DownloadError as e:
+            logger.error(f"youtube-dl download error: {e}")
+            error_str = str(e).lower()
+            
+            if 'http error 403' in error_str:
+                return None, "❌ Access forbidden. Video may be region-blocked or private."
+            elif 'http error 404' in error_str:
+                return None, "❌ Video not found or has been deleted."
+            elif 'http error 429' in error_str:
+                return None, "❌ Too many requests. Try again later."
+            elif 'private video' in error_str:
+                return None, "❌ This is a private video."
+            elif 'video unavailable' in error_str:
+                return None, "❌ Video unavailable or region-blocked."
+            elif 'age-restricted' in error_str:
+                return None, "❌ Age-restricted video cannot be downloaded."
+            elif 'live stream' in error_str:
+                return None, "❌ Live streams are not supported."
+            else:
+                return None, f"❌ Download error: {str(e)[:100]}"
                 
         except Exception as e:
-            logger.error(f"pytube error: {e}")
-            
-            # Handle specific pytube errors
+            logger.error(f"youtube-dl error: {e}")
             error_str = str(e).lower()
-            if 'regex' in error_str or 'extract' in error_str:
-                return None, "❌ YouTube changed their system. pytube needs an update."
-            elif 'unavailable' in error_str:
-                return None, "❌ Video unavailable or region-blocked"
-            elif 'private' in error_str:
-                return None, "❌ Private video"
-            elif 'age' in error_str:
-                return None, "❌ Age-restricted video"
-            elif 'live' in error_str:
-                return None, "❌ Live streams not supported"
+            
+            if 'signature' in error_str or 'cipher' in error_str:
+                return None, "❌ YouTube signature issue. youtube-dl may need an update."
+            elif 'regex' in error_str or 'extract' in error_str:
+                return None, "❌ YouTube changed their system. youtube-dl needs an update."
+            elif 'network' in error_str or 'connection' in error_str:
+                return None, "❌ Network error. Check your internet connection."
             else:
-                return None, f"❌ pytube error: {str(e)[:100]}"
+                return None, f"❌ Error: {str(e)[:100]}"
     
     async def download_youtube(self, url, format_type):
-        """Main YouTube download method using pytube"""
+        """Main YouTube download method using youtube-dl"""
         logger.info(f"Downloading YouTube {format_type}: {url}")
-        return await self.download_youtube_pytube(url, format_type)
+        return await self.download_youtube_youtube_dl(url, format_type)
     
     async def download_instagram_simple(self, url, format_type):
         """Simple Instagram downloader using direct web scraping"""
