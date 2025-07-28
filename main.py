@@ -96,7 +96,10 @@ class MediaDownloaderBot:
             return "Unknown"
     
     async def download_youtube(self, url: str, format_type: str):
-        """Download YouTube content using yt‑dlp with PO‑token support."""
+        """
+        Download YouTube video or audio using yt-dlp with PO-token support (2025).
+        Replaces old cookie-based logic.
+        """
         logger.info(f"Downloading YouTube {format_type}: {url}")
         temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
 
@@ -105,26 +108,24 @@ class MediaDownloaderBot:
             m = re.search(r"/shorts/([A-Za-z0-9_-]+)", url)
             if m:
                 url = f"https://www.youtube.com/watch?v={m.group(1)}"
+                logger.info(f"Converted Shorts URL: {url}")
 
-        # base options
+        # yt-dlp options with PO token + mweb client
         ydl_opts = {
             "outtmpl": os.path.join(temp_dir, "%(id)s.%(ext)s"),
             "noplaylist": True,
             "retries": 5,
             "quiet": False,
-            "concurrent_fragment_downloads": 3,
-            # tell yt‑dlp to use mweb first, then web; fetch PO token automatically
             "extractor_args": {
                 "youtube": {
-                    "player_client": ["mweb", "web"],  # avoid tv client
-                    "fetch_pot": ["auto"],             # request token from plugin if needed
-                    # optionally skip config requests to reduce network traffic
+                    "player_client": ["mweb", "web"],  # avoid TV client
+                    "fetch_pot": ["auto"],             # automatically request PO token
                     "player_skip": ["configs"],
                 }
-            },
+            }
         }
 
-        # set format selection
+        # Format selection
         if format_type == "audio":
             ydl_opts.update({
                 "format": "bestaudio[ext=m4a]/bestaudio/best",
@@ -137,44 +138,39 @@ class MediaDownloaderBot:
         else:  # video
             ydl_opts["format"] = "bestvideo[height<=720]+bestaudio/best[height<=720]"
 
-        # optionally pass cookies if user authenticated (for age‑restricted content)
-        cookies_file = os.environ.get("YTDLP_COOKIES_FILE")
-        if cookies_file:
-            ydl_opts["cookies"] = cookies_file
-
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # Extract info (for size check)
                 info = ydl.extract_info(url, download=False)
                 filesize = info.get("filesize") or info.get("filesize_approx", 0)
                 if filesize and filesize > MAX_FILE_SIZE:
-                    size_mb = filesize // (1024 * 1024)
-                    return None, f"❌ File too large ({size_mb}MB). Limit: {MAX_FILE_SIZE // (1024*1024)}MB"
+                    return None, f"❌ File too large ({filesize // (1024*1024)}MB). Limit: {MAX_FILE_SIZE // (1024*1024)}MB"
 
-                # actual download
+                # Download
                 ydl.download([url])
-                # locate downloaded file
-                for fname in os.listdir(temp_dir):
-                    path = os.path.join(temp_dir, fname)
-                    if os.path.isfile(path):
-                        if os.path.getsize(path) > MAX_FILE_SIZE:
-                            size_mb = os.path.getsize(path) // (1024 * 1024)
-                            return None, f"❌ File too large ({size_mb}MB). Limit: {MAX_FILE_SIZE // (1024*1024)}MB"
-                        return path, None
-            return None, "❌ No file downloaded"
+
+            # Find downloaded file
+            files = [f for f in os.listdir(temp_dir) if os.path.isfile(os.path.join(temp_dir, f))]
+            if not files:
+                return None, "❌ No file downloaded"
+
+            filepath = os.path.join(temp_dir, files[0])
+
+            # Size check after download
+            if os.path.getsize(filepath) > MAX_FILE_SIZE:
+                return None, f"❌ File too large ({os.path.getsize(filepath)//(1024*1024)}MB). Limit: {MAX_FILE_SIZE // (1024*1024)}MB"
+
+            return filepath, None
+
         except yt_dlp.utils.DownloadError as e:
-            # if token fetching failed or we hit bot‑detection, advise user to try a proxy
-            if "bot" in str(e).lower() or "private" in str(e).lower():
+            if "bot" in str(e).lower() or "sign in" in str(e).lower():
                 return None, "❌ YouTube blocked this download (bot detection). Try again later or from a different IP."
             return None, f"❌ Download error: {e}"
+
         except Exception as e:
-            logger.error(f"yt‑dlp error: {e}")
+            logger.error(f"yt-dlp error: {e}")
             return None, f"❌ Unexpected error: {e}"
 
-    async def download_youtube(self, url, format_type):
-        """Main YouTube download method"""
-        logger.info(f"Downloading YouTube {format_type}: {url}")
-        return await self.download_youtube(url, format_type)
-    
     async def download_instagram_simple(self, url, format_type):
         """Simple Instagram downloader using direct web scraping"""
         temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
