@@ -15,6 +15,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 import yt_dlp
 import requests
 import instaloader
+from pytube import YouTube
 
 # Load environment variables
 load_dotenv()
@@ -95,8 +96,8 @@ class MediaDownloaderBot:
         except:
             return "Unknown"
     
-    async def download_youtube_y2mate(self, url, format_type):
-        """Use Y2mate API for YouTube downloads"""
+    async def download_youtube_pytube(self, url, format_type):
+        """Use pytube library for YouTube downloads"""
         temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
         
         try:
@@ -109,283 +110,167 @@ class MediaDownloaderBot:
                     clean_url = f"https://www.youtube.com/watch?v={video_id}"
                     logger.info(f"Converted Shorts URL: {clean_url}")
             
-            # Y2mate API endpoint
-            api_url = "https://www.y2mate.com/mates/analyzeV2/ajax"
+            logger.info(f"Using pytube for: {clean_url}")
             
-            headers = {
-                'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'X-Requested-With': 'XMLHttpRequest',
-                'Referer': 'https://www.y2mate.com/',
-                'Origin': 'https://www.y2mate.com'
-            }
+            # Create YouTube object
+            yt = YouTube(clean_url)
             
-            # First request to analyze the video
-            analyze_data = {
-                'k_query': clean_url,
-                'k_page': 'home',
-                'hl': 'en',
-                'q_auto': '0'
-            }
+            # Get video info
+            title = yt.title
+            logger.info(f"Video title: {title}")
+            logger.info(f"Video length: {yt.length} seconds")
             
-            logger.info(f"Analyzing video with Y2mate: {clean_url}")
-            response = requests.post(api_url, data=analyze_data, headers=headers, timeout=30)
+            # Clean title for filename
+            safe_title = re.sub(r'[^\w\s-]', '', title)[:50]
             
-            if response.status_code == 200:
-                result = response.json()
-                
-                if result.get('status') == 'ok':
-                    links = result.get('links', {})
-                    
-                    # Choose appropriate quality/format
-                    if format_type == 'audio':
-                        # Look for MP3 formats
-                        mp3_links = links.get('mp3', {})
-                        if mp3_links:
-                            # Get best quality MP3 (usually 128k)
-                            quality_keys = ['128', '192', '320', '64']
-                            selected_key = None
-                            for key in quality_keys:
-                                if key in mp3_links:
-                                    selected_key = key
-                                    break
-                            
-                            if selected_key:
-                                k_value = mp3_links[selected_key]['k']
-                                
-                                # Second request to get download link
-                                convert_data = {
-                                    'vid': result.get('vid'),
-                                    'k': k_value
-                                }
-                                
-                                convert_url = "https://www.y2mate.com/mates/convertV2/index"
-                                convert_response = requests.post(convert_url, data=convert_data, headers=headers, timeout=60)
-                                
-                                if convert_response.status_code == 200:
-                                    convert_result = convert_response.json()
-                                    
-                                    if convert_result.get('status') == 'ok':
-                                        download_url = convert_result.get('dlink')
-                                        
-                                        if download_url:
-                                            return await self._download_file(download_url, temp_dir, format_type, headers)
-                    else:
-                        # Look for MP4 formats
-                        mp4_links = links.get('mp4', {})
-                        if mp4_links:
-                            # Get best available quality (720p, 480p, 360p)
-                            quality_keys = ['720', '480', '360', '144']
-                            selected_key = None
-                            for key in quality_keys:
-                                if key in mp4_links:
-                                    selected_key = key
-                                    break
-                            
-                            if selected_key:
-                                k_value = mp4_links[selected_key]['k']
-                                
-                                # Second request to get download link
-                                convert_data = {
-                                    'vid': result.get('vid'),
-                                    'k': k_value
-                                }
-                                
-                                convert_url = "https://www.y2mate.com/mates/convertV2/index"
-                                convert_response = requests.post(convert_url, data=convert_data, headers=headers, timeout=60)
-                                
-                                if convert_response.status_code == 200:
-                                    convert_result = convert_response.json()
-                                    
-                                    if convert_result.get('status') == 'ok':
-                                        download_url = convert_result.get('dlink')
-                                        
-                                        if download_url:
-                                            return await self._download_file(download_url, temp_dir, format_type, headers)
-                
-                return None, "❌ Y2mate: No suitable format found"
-            else:
-                return None, f"❌ Y2mate API error: HTTP {response.status_code}"
-                
-        except requests.RequestException as e:
-            logger.error(f"Y2mate network error: {e}")
-            return None, f"❌ Network error: {str(e)[:50]}"
-        except Exception as e:
-            logger.error(f"Y2mate error: {e}")
-            return None, f"❌ Y2mate failed: {str(e)[:50]}"
-    
-    async def download_youtube_ytmp3(self, url, format_type):
-        """Use YTMP3 API for YouTube downloads"""
-        temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
-        
-        try:
-            # Clean URL
-            clean_url = url
-            if 'shorts/' in url:
-                video_id_match = re.search(r'/shorts/([A-Za-z0-9_-]+)', url)
-                if video_id_match:
-                    video_id = video_id_match.group(1)
-                    clean_url = f"https://www.youtube.com/watch?v={video_id}"
-            
-            # YTMP3 API
             if format_type == 'audio':
-                api_url = "https://ytmp3.cc/api/ajax/mp3"
-            else:
-                api_url = "https://ytmp3.cc/api/ajax/mp4"
-            
-            headers = {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'Referer': 'https://ytmp3.cc/',
-                'Origin': 'https://ytmp3.cc'
-            }
-            
-            data = {
-                'url': clean_url,
-                'quality': '192' if format_type == 'audio' else '720'
-            }
-            
-            logger.info(f"Requesting from YTMP3: {clean_url}")
-            response = requests.post(api_url, data=data, headers=headers, timeout=30)
-            
-            if response.status_code == 200:
-                result = response.json()
+                # Get audio stream
+                logger.info("Getting audio stream...")
+                audio_stream = yt.streams.filter(only_audio=True).first()
                 
-                if result.get('success'):
-                    download_url = result.get('downloadUrl') or result.get('url')
+                if not audio_stream:
+                    return None, "❌ No audio stream available"
+                
+                logger.info(f"Audio stream: {audio_stream.mime_type}, {audio_stream.abr}")
+                
+                # Check file size estimate
+                if audio_stream.filesize:
+                    size_mb = audio_stream.filesize // (1024 * 1024)
+                    if audio_stream.filesize > MAX_FILE_SIZE:
+                        return None, f"❌ File too large ({size_mb}MB)"
+                    logger.info(f"Estimated file size: {size_mb}MB")
+                
+                # Download audio
+                logger.info("Downloading audio...")
+                audio_file = audio_stream.download(
+                    output_path=temp_dir,
+                    filename=f"{safe_title}_audio"
+                )
+                
+                # Convert to MP3 if needed
+                if not audio_file.endswith('.mp3'):
+                    mp3_file = os.path.join(temp_dir, f"{safe_title}_audio.mp3")
+                    try:
+                        logger.info("Converting to MP3...")
+                        cmd = [
+                            'ffmpeg', '-i', audio_file, 
+                            '-vn', '-acodec', 'mp3', '-ab', '192k', 
+                            mp3_file, '-y'
+                        ]
+                        result = subprocess.run(cmd, capture_output=True, timeout=120)
+                        
+                        if result.returncode == 0 and os.path.exists(mp3_file):
+                            os.remove(audio_file)
+                            audio_file = mp3_file
+                            logger.info("MP3 conversion successful")
+                        else:
+                            logger.warning("MP3 conversion failed, using original format")
+                    except Exception as conv_error:
+                        logger.warning(f"MP3 conversion error: {conv_error}")
+                
+                return audio_file, None
+                
+            else:
+                # Get video stream
+                logger.info("Getting video stream...")
+                
+                # Try progressive streams first (video+audio combined)
+                video_stream = yt.streams.filter(
+                    progressive=True, 
+                    file_extension='mp4'
+                ).order_by('resolution').desc().first()
+                
+                if not video_stream:
+                    # If no progressive, try adaptive video streams
+                    video_stream = yt.streams.filter(
+                        adaptive=True, 
+                        file_extension='mp4',
+                        type='video'
+                    ).order_by('resolution').desc().first()
+                
+                if not video_stream:
+                    # Last resort - any video stream
+                    video_stream = yt.streams.filter(type='video').first()
+                
+                if not video_stream:
+                    return None, "❌ No video stream available"
+                
+                logger.info(f"Video stream: {video_stream.mime_type}, {video_stream.resolution}")
+                
+                # Check file size
+                if video_stream.filesize:
+                    size_mb = video_stream.filesize // (1024 * 1024)
+                    if video_stream.filesize > MAX_FILE_SIZE:
+                        return None, f"❌ File too large ({size_mb}MB)"
+                    logger.info(f"Estimated file size: {size_mb}MB")
+                
+                # Download video
+                logger.info("Downloading video...")
+                video_file = video_stream.download(
+                    output_path=temp_dir,
+                    filename=f"{safe_title}_video"
+                )
+                
+                # If adaptive stream (video only), need to merge with audio
+                if video_stream.adaptive:
+                    logger.info("Adaptive stream detected, getting audio...")
+                    audio_stream = yt.streams.filter(only_audio=True).first()
                     
-                    if download_url:
-                        return await self._download_file(download_url, temp_dir, format_type, headers)
-                    else:
-                        return None, "❌ YTMP3: No download URL received"
-                else:
-                    error_msg = result.get('error', 'Unknown error')
-                    return None, f"❌ YTMP3: {error_msg}"
-            else:
-                return None, f"❌ YTMP3 API error: HTTP {response.status_code}"
+                    if audio_stream:
+                        audio_file = audio_stream.download(
+                            output_path=temp_dir,
+                            filename=f"{safe_title}_audio_temp"
+                        )
+                        
+                        # Merge video and audio with ffmpeg
+                        merged_file = os.path.join(temp_dir, f"{safe_title}_merged.mp4")
+                        try:
+                            logger.info("Merging video and audio...")
+                            cmd = [
+                                'ffmpeg', '-i', video_file, '-i', audio_file,
+                                '-c:v', 'copy', '-c:a', 'aac', '-strict', 'experimental',
+                                merged_file, '-y'
+                            ]
+                            result = subprocess.run(cmd, capture_output=True, timeout=180)
+                            
+                            if result.returncode == 0 and os.path.exists(merged_file):
+                                os.remove(video_file)
+                                os.remove(audio_file)
+                                video_file = merged_file
+                                logger.info("Video/audio merge successful")
+                            else:
+                                logger.warning("Merge failed, using video-only")
+                                if os.path.exists(audio_file):
+                                    os.remove(audio_file)
+                        except Exception as merge_error:
+                            logger.warning(f"Merge error: {merge_error}")
+                            if os.path.exists(audio_file):
+                                os.remove(audio_file)
+                
+                return video_file, None
                 
         except Exception as e:
-            logger.error(f"YTMP3 error: {e}")
-            return None, f"❌ YTMP3 failed: {str(e)[:50]}"
-    
-    async def download_youtube_loader(self, url, format_type):
-        """Use Loader.to API for YouTube downloads"""
-        temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
-        
-        try:
-            # Clean URL
-            clean_url = url
-            if 'shorts/' in url:
-                video_id_match = re.search(r'/shorts/([A-Za-z0-9_-]+)', url)
-                if video_id_match:
-                    video_id = video_id_match.group(1)
-                    clean_url = f"https://www.youtube.com/watch?v={video_id}"
+            logger.error(f"pytube error: {e}")
             
-            # Loader.to API
-            api_url = "https://loader.to/ajax/search"
-            
-            headers = {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
-                'X-Requested-With': 'XMLHttpRequest',
-                'Referer': 'https://loader.to/',
-                'Origin': 'https://loader.to'
-            }
-            
-            data = {
-                'query': clean_url
-            }
-            
-            logger.info(f"Requesting from Loader.to: {clean_url}")
-            response = requests.post(api_url, data=data, headers=headers, timeout=30)
-            
-            if response.status_code == 200:
-                result = response.json()
-                
-                if result.get('success'):
-                    links = result.get('links', [])
-                    
-                    # Find appropriate format
-                    for link in links:
-                        if format_type == 'audio' and link.get('f') == 'mp3':
-                            download_url = link.get('link')
-                            if download_url:
-                                return await self._download_file(download_url, temp_dir, format_type, headers)
-                        elif format_type == 'video' and link.get('f') == 'mp4':
-                            download_url = link.get('link')
-                            if download_url:
-                                return await self._download_file(download_url, temp_dir, format_type, headers)
-                
-                return None, "❌ Loader.to: No suitable format found"
+            # Handle specific pytube errors
+            error_str = str(e).lower()
+            if 'regex' in error_str or 'extract' in error_str:
+                return None, "❌ YouTube changed their system. pytube needs an update."
+            elif 'unavailable' in error_str:
+                return None, "❌ Video unavailable or region-blocked"
+            elif 'private' in error_str:
+                return None, "❌ Private video"
+            elif 'age' in error_str:
+                return None, "❌ Age-restricted video"
+            elif 'live' in error_str:
+                return None, "❌ Live streams not supported"
             else:
-                return None, f"❌ Loader.to API error: HTTP {response.status_code}"
-                
-        except Exception as e:
-            logger.error(f"Loader.to error: {e}")
-            return None, f"❌ Loader.to failed: {str(e)[:50]}"
-    
-    async def _download_file(self, download_url, temp_dir, format_type, headers):
-        """Helper function to download file from URL"""
-        try:
-            logger.info(f"Downloading file from: {download_url}")
-            
-            # Download the file
-            file_response = requests.get(download_url, stream=True, timeout=120, headers=headers)
-            file_response.raise_for_status()
-            
-            # Create filename
-            timestamp = str(int(time.time()))
-            if format_type == 'audio':
-                filename = f"youtube_audio_{timestamp}.mp3"
-            else:
-                filename = f"youtube_video_{timestamp}.mp4"
-            
-            filepath = os.path.join(temp_dir, filename)
-            
-            # Download with size check
-            total_size = 0
-            with open(filepath, 'wb') as f:
-                for chunk in file_response.iter_content(chunk_size=8192):
-                    if chunk:
-                        total_size += len(chunk)
-                        if total_size > MAX_FILE_SIZE:
-                            return None, f"❌ File too large ({total_size // (1024*1024)}MB)"
-                        f.write(chunk)
-            
-            logger.info(f"Downloaded successfully: {filepath} ({total_size // (1024*1024)}MB)")
-            return filepath, None
-            
-        except Exception as e:
-            logger.error(f"File download error: {e}")
-            return None, f"❌ Download failed: {str(e)[:50]}"
+                return None, f"❌ pytube error: {str(e)[:100]}"
     
     async def download_youtube(self, url, format_type):
-        """Main YouTube download method - tries different APIs"""
+        """Main YouTube download method using pytube"""
         logger.info(f"Downloading YouTube {format_type}: {url}")
-        
-        # Try Y2mate API first
-        filepath, error = await self.download_youtube_y2mate(url, format_type)
-        if filepath:
-            return filepath, error
-        
-        logger.warning(f"Y2mate failed: {error}")
-        
-        # Try YTMP3 API
-        filepath, error = await self.download_youtube_ytmp3(url, format_type)
-        if filepath:
-            return filepath, error
-        
-        logger.warning(f"YTMP3 failed: {error}")
-        
-        # Try Loader.to API
-        filepath, error = await self.download_youtube_loader(url, format_type)
-        if filepath:
-            return filepath, error
-        
-        logger.warning(f"Loader.to failed: {error}")
-        
-        # All methods failed
-        return None, "❌ All YouTube download APIs failed. Video may be restricted or APIs are down."
+        return await self.download_youtube_pytube(url, format_type)
     
     async def download_instagram_simple(self, url, format_type):
         """Simple Instagram downloader using direct web scraping"""
