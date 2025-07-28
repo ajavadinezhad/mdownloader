@@ -40,8 +40,8 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 class MediaDownloaderBot:
     def __init__(self):
         self.supported_platforms = {
-           #'youtube.com': 'YouTube',
-           #'youtu.be': 'YouTube',
+            'youtube.com': 'YouTube',
+            'youtu.be': 'YouTube',
             'twitter.com': 'Twitter/X',
             'x.com': 'Twitter/X',
            #'instagram.com': 'Instagram',
