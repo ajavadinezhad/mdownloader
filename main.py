@@ -109,69 +109,121 @@ class MediaDownloaderBot:
                 if video_id_match:
                     video_id = video_id_match.group(1)
                     clean_url = f"https://www.youtube.com/watch?v={video_id}"
+                    logger.info(f"Converted Shorts URL: {clean_url}")
             
-            # Use PyTubeFix with progress callback
-            yt = YouTube(clean_url, on_progress_callback=on_progress, use_oauth=False, allow_oauth_cache=False)
+            # Try multiple approaches for better success rate
+            try:
+                # First attempt with minimal options
+                yt = YouTube(clean_url)
+                logger.info(f"YouTube object created successfully for: {yt.title}")
+            except Exception as e1:
+                logger.warning(f"First attempt failed: {e1}")
+                try:
+                    # Second attempt with different options
+                    yt = YouTube(url)  # Try original URL
+                    logger.info(f"Second attempt succeeded for: {yt.title}")
+                except Exception as e2:
+                    logger.warning(f"Second attempt failed: {e2}")
+                    # Third attempt with age bypass
+                    try:
+                        yt = YouTube(clean_url, use_oauth=False, allow_oauth_cache=False)
+                        logger.info(f"Third attempt succeeded for: {yt.title}")
+                    except Exception as e3:
+                        logger.error(f"All attempts failed. Last error: {e3}")
+                        raise e3
+            
             title = yt.title
+            logger.info(f"Video title: {title}")
+            logger.info(f"Video length: {yt.length} seconds")
             
             if format_type == 'audio':
                 # Get audio-only stream
                 stream = yt.streams.get_audio_only()
                 if not stream:
-                    # Fallback to any audio stream
-                    stream = yt.streams.filter(only_audio=True).first()
+                    # Try alternative audio streams
+                    stream = yt.streams.filter(only_audio=True).order_by('abr').desc().first()
                 if not stream:
+                    logger.error("No audio streams found")
                     return None, "❌ No audio stream available"
+                logger.info(f"Selected audio stream: {stream.mime_type}, {stream.abr}")
             else:
-                # Get highest resolution video
+                # Get video stream
                 stream = yt.streams.get_highest_resolution()
                 if not stream:
-                    # Fallback to any progressive stream
+                    # Try progressive streams
                     stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
                 if not stream:
+                    # Try any video stream
+                    stream = yt.streams.filter(adaptive=False).first()
+                if not stream:
+                    logger.error("No video streams found")
                     return None, "❌ No video stream available"
+                logger.info(f"Selected video stream: {stream.mime_type}, {stream.resolution}")
             
             # Check file size
-            if stream.filesize and stream.filesize > MAX_FILE_SIZE:
+            if stream.filesize:
                 size_mb = stream.filesize // (1024 * 1024)
                 max_mb = MAX_FILE_SIZE // (1024 * 1024)
-                return None, f"❌ File too large ({size_mb}MB). Limit: {max_mb}MB"
+                logger.info(f"File size: {size_mb}MB")
+                if stream.filesize > MAX_FILE_SIZE:
+                    return None, f"❌ File too large ({size_mb}MB). Limit: {max_mb}MB"
+            else:
+                logger.warning("File size unknown")
             
             # Download with pytubefix
             safe_title = re.sub(r'[^\w\s-]', '', title)[:50]
             filename = f"{safe_title}_{format_type}"
             
-            # Download to temp directory
+            logger.info(f"Starting download to: {temp_dir}")
             filepath = stream.download(output_path=temp_dir, filename=filename)
+            logger.info(f"Download completed: {filepath}")
             
             # Convert to MP3 if audio and ffmpeg available
             if format_type == 'audio' and not filepath.endswith('.mp3'):
                 mp3_filepath = os.path.join(temp_dir, f"{safe_title}_audio.mp3")
                 try:
+                    logger.info("Converting to MP3...")
                     cmd = ['ffmpeg', '-i', filepath, '-vn', '-acodec', 'mp3', '-ab', '192k', mp3_filepath, '-y']
                     result = subprocess.run(cmd, capture_output=True, timeout=60)
                     if result.returncode == 0 and os.path.exists(mp3_filepath):
                         os.remove(filepath)
                         filepath = mp3_filepath
-                except:
-                    pass  # Use original format if conversion fails
+                        logger.info("MP3 conversion successful")
+                    else:
+                        logger.warning("MP3 conversion failed, using original format")
+                except Exception as conv_error:
+                    logger.warning(f"MP3 conversion error: {conv_error}")
             
             return filepath, None
             
-        except VideoUnavailable:
-            return None, "❌ Video unavailable or private"
-        except AgeRestrictedError:
-            return None, "❌ Age-restricted content"
-        except VideoPrivate:
+        except VideoUnavailable as e:
+            logger.error(f"Video unavailable: {e}")
+            return None, "❌ Video unavailable, deleted, or region-blocked"
+        except AgeRestrictedError as e:
+            logger.error(f"Age restricted: {e}")
+            return None, "❌ Age-restricted content cannot be downloaded"
+        except VideoPrivate as e:
+            logger.error(f"Video private: {e}")
             return None, "❌ Private video"
-        except MembersOnly:
+        except MembersOnly as e:
+            logger.error(f"Members only: {e}")
             return None, "❌ Members-only content"
         except Exception as e:
-            logger.error(f"YouTube error: {e}")
-            if 'regex' in str(e).lower() or 'extract' in str(e).lower():
-                return None, "❌ YouTube updated their system. PyTubeFix needs an update."
+            logger.error(f"YouTube download error: {e}")
+            error_msg = str(e).lower()
+            
+            if 'regex' in error_msg or 'extract' in error_msg:
+                return None, "❌ YouTube changed their system. Try a different video or wait for PyTubeFix update."
+            elif 'unavailable' in error_msg or 'not found' in error_msg:
+                return None, "❌ Video not found or unavailable in your region"
+            elif 'private' in error_msg:
+                return None, "❌ This video is private"
+            elif 'sign in' in error_msg or 'login' in error_msg:
+                return None, "❌ This video requires sign-in to view"
+            elif 'restricted' in error_msg:
+                return None, "❌ Video restricted in your region or age-restricted"
             else:
-                return None, f"❌ YouTube download failed: {str(e)[:100]}"
+                return None, f"❌ Download failed. Try a different YouTube video."
     
     async def download_instagram_simple(self, url, format_type):
         """Simple Instagram downloader using direct web scraping"""
