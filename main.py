@@ -6,6 +6,7 @@ import subprocess
 import re
 import json
 import os
+import time
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 
@@ -39,11 +40,11 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 class MediaDownloaderBot:
     def __init__(self):
         self.supported_platforms = {
-           'youtube.com': 'YouTube',
-           'youtu.be': 'YouTube',
+            'youtube.com': 'YouTube',
+            'youtu.be': 'YouTube',
             'twitter.com': 'Twitter/X',
             'x.com': 'Twitter/X',
-           'instagram.com': 'Instagram',
+            'instagram.com': 'Instagram',
             'soundcloud.com': 'SoundCloud',
         }
         self.url_cache = {}
@@ -66,27 +67,10 @@ class MediaDownloaderBot:
                 domain = domain[4:]
             return any(platform in domain for platform in self.supported_platforms.keys())
         except:
-            pass
-
-def main():
-    logger.info("🤖 Starting Media Downloader Bot...")
-    
-    application = Application.builder().token(BOT_TOKEN).build()
-    
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
-    application.add_handler(CallbackQueryHandler(handle_format_selection))
-    
-    logger.info("🚀 Bot is running!")
-    application.run_polling(drop_pending_updates=True)
-
-if __name__ == '__main__':
-    main()
             return False
     
     def store_url(self, url, user_id):
         import hashlib
-        import time
         url_hash = hashlib.md5(f"{url}{user_id}{time.time()}".encode()).hexdigest()[:8]
         self.url_cache[url_hash] = url
         if len(self.url_cache) > 100:
@@ -111,192 +95,64 @@ if __name__ == '__main__':
         except:
             return "Unknown"
     
-    async def download_youtube_improved(self, url, format_type):
-        """Improved YouTube downloader with multiple fallback methods"""
+    async def download_youtube_cobalt(self, url, format_type):
+        """Use cobalt.tools API for YouTube downloads"""
         temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
         
-        # Clean URL first
-        clean_url = url
-        if 'shorts/' in url:
-            video_id_match = re.search(r'/shorts/([A-Za-z0-9_-]+)', url)
-            if video_id_match:
-                video_id = video_id_match.group(1)
-                clean_url = f"https://www.youtube.com/watch?v={video_id}"
-                logger.info(f"Converted Shorts URL: {clean_url}")
-        
-        # Method 1: Try yt-dlp first (most reliable)
-        logger.info("Trying yt-dlp method...")
         try:
-            return await self._download_with_ytdlp_youtube(clean_url, format_type, temp_dir)
-        except Exception as e:
-            logger.warning(f"yt-dlp method failed: {e}")
-        
-        # Method 2: Try yt-dlp with different extractors
-        logger.info("Trying yt-dlp with different extractors...")
-        try:
-            return await self._download_with_ytdlp_alternative(clean_url, format_type, temp_dir)
-        except Exception as e:
-            logger.warning(f"yt-dlp alternative method failed: {e}")
-        
-        # Method 3: Try cobalt.tools API
-        logger.info("Trying cobalt.tools API...")
-        try:
-            return await self._download_with_cobalt(clean_url, format_type, temp_dir)
-        except Exception as e:
-            logger.warning(f"Cobalt API method failed: {e}")
-        
-        # Method 4: Try y2mate API (if available)
-        logger.info("Trying y2mate-like service...")
-        try:
-            return await self._download_with_web_service(clean_url, format_type, temp_dir)
-        except Exception as e:
-            logger.warning(f"Web service method failed: {e}")
-        
-        # All methods failed
-        return None, "❌ All YouTube download methods failed. YouTube may have updated their system."
-    
-    async def _download_with_ytdlp_youtube(self, url, format_type, temp_dir):
-        """Primary yt-dlp method with optimized settings"""
-        opts = {
-            'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
-            'noplaylist': True,
-            'retries': 5,
-            'fragment_retries': 5,
-            'skip_unavailable_fragments': True,
-            'keepvideo': False,
-            'no_warnings': False,
-            'extract_flat': False,
-            'writethumbnail': False,
-            'writeinfojson': False,
-            # Add cookies and headers to avoid bot detection
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate',
-                'Connection': 'keep-alive',
-            }
-        }
-        
-        if format_type == 'audio':
-            opts.update({
-                'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }]
-            })
-        else:
-            # For video, prefer formats that work well
-            opts['format'] = 'best[height<=720][ext=mp4]/best[height<=720]/best[ext=mp4]/best'
-        
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            # First get info to check file size
-            info = ydl.extract_info(url, download=False)
-            title = info.get('title', 'Unknown')
-            logger.info(f"Video title: {title}")
+            # Clean URL first
+            clean_url = url
+            if 'shorts/' in url:
+                video_id_match = re.search(r'/shorts/([A-Za-z0-9_-]+)', url)
+                if video_id_match:
+                    video_id = video_id_match.group(1)
+                    clean_url = f"https://www.youtube.com/watch?v={video_id}"
+                    logger.info(f"Converted Shorts URL: {clean_url}")
             
-            # Check file size
-            filesize = info.get('filesize') or info.get('filesize_approx', 0)
-            if filesize and filesize > MAX_FILE_SIZE:
-                return None, f"❌ File too large ({filesize // (1024*1024)}MB). Limit: {MAX_FILE_SIZE // (1024*1024)}MB"
-            
-            # Download
-            ydl.download([url])
-            
-            # Find downloaded file
-            files = [f for f in os.listdir(temp_dir) if os.path.isfile(os.path.join(temp_dir, f))]
-            if files:
-                filepath = os.path.join(temp_dir, files[0])
-                # Double-check file size
-                actual_size = os.path.getsize(filepath)
-                if actual_size > MAX_FILE_SIZE:
-                    return None, f"❌ File too large ({actual_size // (1024*1024)}MB)"
-                return filepath, None
-            else:
-                return None, "❌ Download completed but file not found"
-    
-    async def _download_with_ytdlp_alternative(self, url, format_type, temp_dir):
-        """Alternative yt-dlp method with different settings"""
-        opts = {
-            'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),
-            'noplaylist': True,
-            'retries': 3,
-            'ignoreerrors': False,
-            # Use different extractor options
-            'extractor_args': {
-                'youtube': {
-                    'skip': ['dash', 'hls'],  # Skip DASH and HLS formats that might cause issues
-                    'player_client': ['android', 'web'],  # Try different clients
-                }
-            },
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Linux; Android 10; SM-G973F) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
-            }
-        }
-        
-        if format_type == 'audio':
-            opts['format'] = 'worstaudio/worst'  # Sometimes worst quality works when best doesn't
-            opts['postprocessors'] = [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '128',  # Lower quality for better compatibility
-            }]
-        else:
-            opts['format'] = 'worst[height>=360]/worst'  # Lower quality for better success rate
-        
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            filesize = info.get('filesize') or info.get('filesize_approx', 0)
-            if filesize and filesize > MAX_FILE_SIZE:
-                return None, f"❌ File too large"
-            
-            ydl.download([url])
-            
-            files = [f for f in os.listdir(temp_dir) if os.path.isfile(os.path.join(temp_dir, f))]
-            if files:
-                return os.path.join(temp_dir, files[0]), None
-            else:
-                return None, "❌ Alternative method failed"
-    
-    async def _download_with_cobalt(self, url, format_type, temp_dir):
-        """Try using cobalt.tools API as fallback"""
-        try:
+            # Cobalt.tools API
             api_url = "https://co.wuk.sh/api/json"
             
             headers = {
                 'Accept': 'application/json',
                 'Content-Type': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
             }
             
             data = {
-                "url": url,
+                "url": clean_url,
                 "vCodec": "h264",
-                "vQuality": "720",
-                "aFormat": "mp3" if format_type == 'audio' else "best",
-                "isAudioOnly": format_type == 'audio'
+                "vQuality": "720" if format_type == 'video' else "360",
+                "aFormat": "mp3",
+                "isAudioOnly": format_type == 'audio',
+                "isNoTTWatermark": True,
+                "dubLang": False
             }
             
+            logger.info(f"Requesting from Cobalt API: {clean_url}")
             response = requests.post(api_url, json=data, headers=headers, timeout=30)
             
             if response.status_code == 200:
                 result = response.json()
+                logger.info(f"Cobalt response status: {result.get('status')}")
                 
                 if result.get('status') == 'success' or result.get('status') == 'redirect':
                     download_url = result.get('url')
                     if download_url:
                         # Download the file
-                        file_response = requests.get(download_url, stream=True, timeout=60)
+                        logger.info(f"Downloading from: {download_url}")
+                        file_response = requests.get(download_url, stream=True, timeout=120, headers={
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                        })
                         file_response.raise_for_status()
                         
-                        # Determine filename
-                        content_type = file_response.headers.get('content-type', '')
-                        if format_type == 'audio' or 'audio' in content_type:
-                            filename = "youtube_audio.mp3"
+                        # Create filename
+                        video_id_match = re.search(r'(?:v=|/)([A-Za-z0-9_-]{11})', clean_url)
+                        video_id = video_id_match.group(1) if video_id_match else str(int(time.time()))
+                        
+                        if format_type == 'audio':
+                            filename = f"youtube_audio_{video_id}.mp3"
                         else:
-                            filename = "youtube_video.mp4"
+                            filename = f"youtube_video_{video_id}.mp4"
                         
                         filepath = os.path.join(temp_dir, filename)
                         
@@ -307,25 +163,90 @@ if __name__ == '__main__':
                                 if chunk:
                                     total_size += len(chunk)
                                     if total_size > MAX_FILE_SIZE:
+                                        return None, f"❌ File too large ({total_size // (1024*1024)}MB)"
+                                    f.write(chunk)
+                        
+                        logger.info(f"Downloaded successfully: {filepath} ({total_size // (1024*1024)}MB)")
+                        return filepath, None
+                    else:
+                        return None, "❌ No download URL received from Cobalt"
+                else:
+                    error_msg = result.get('text', 'Unknown error')
+                    return None, f"❌ Cobalt error: {error_msg}"
+            else:
+                return None, f"❌ Cobalt API error: HTTP {response.status_code}"
+                
+        except requests.RequestException as e:
+            logger.error(f"Cobalt network error: {e}")
+            return None, f"❌ Network error: {str(e)[:50]}"
+        except Exception as e:
+            logger.error(f"Cobalt error: {e}")
+            return None, f"❌ Download failed: {str(e)[:50]}"
+    
+    async def download_youtube_alternative_api(self, url, format_type):
+        """Alternative YouTube download using different API service"""
+        temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
+        
+        try:
+            # Clean URL
+            clean_url = url
+            if 'shorts/' in url:
+                video_id_match = re.search(r'/shorts/([A-Za-z0-9_-]+)', url)
+                if video_id_match:
+                    video_id = video_id_match.group(1)
+                    clean_url = f"https://www.youtube.com/watch?v={video_id}"
+            
+            # Try alternative API (example using a different service)
+            api_url = "https://api.vevioz.com/api/button/mp3/en"
+            
+            headers = {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            data = {
+                'url': clean_url
+            }
+            
+            response = requests.post(api_url, data=data, headers=headers, timeout=30)
+            
+            if response.status_code == 200:
+                result = response.json()
+                
+                if result.get('success'):
+                    download_url = result.get('downloadUrl') or result.get('url')
+                    if download_url:
+                        # Download the file
+                        file_response = requests.get(download_url, stream=True, timeout=120)
+                        file_response.raise_for_status()
+                        
+                        video_id_match = re.search(r'(?:v=|/)([A-Za-z0-9_-]{11})', clean_url)
+                        video_id = video_id_match.group(1) if video_id_match else str(int(time.time()))
+                        
+                        filename = f"youtube_{format_type}_{video_id}.{'mp3' if format_type == 'audio' else 'mp4'}"
+                        filepath = os.path.join(temp_dir, filename)
+                        
+                        total_size = 0
+                        with open(filepath, 'wb') as f:
+                            for chunk in file_response.iter_content(chunk_size=8192):
+                                if chunk:
+                                    total_size += len(chunk)
+                                    if total_size > MAX_FILE_SIZE:
                                         return None, "❌ File too large"
                                     f.write(chunk)
                         
                         return filepath, None
-                    else:
-                        return None, "❌ Cobalt API: No download URL received"
-                else:
-                    error_msg = result.get('text', 'Unknown error')
-                    return None, f"❌ Cobalt API: {error_msg}"
-            else:
-                return None, f"❌ Cobalt API returned status {response.status_code}"
                 
-        except requests.RequestException as e:
-            return None, f"❌ Cobalt API network error: {str(e)[:50]}"
+            return None, "❌ Alternative API failed"
+            
         except Exception as e:
-            return None, f"❌ Cobalt API error: {str(e)[:50]}"
+            logger.error(f"Alternative API error: {e}")
+            return None, f"❌ Alternative download failed: {str(e)[:50]}"
     
-    async def _download_with_web_service(self, url, format_type, temp_dir):
-        """Try using a web-based YouTube downloader service"""
+    async def download_youtube_web_scraping(self, url, format_type):
+        """YouTube download using web scraping approach"""
+        temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
+        
         try:
             # Extract video ID
             video_id_match = re.search(r'(?:v=|/)([A-Za-z0-9_-]{11})', url)
@@ -334,28 +255,105 @@ if __name__ == '__main__':
             
             video_id = video_id_match.group(1)
             
-            # Try a simple YouTube info API (this is a basic example)
-            # Note: You might need to find working APIs or implement your own
-            info_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
+            # Get video info using YouTube's oembed API
+            oembed_url = f"https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v={video_id}&format=json"
             
-            response = requests.get(info_url, timeout=10)
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            response = requests.get(oembed_url, headers=headers, timeout=15)
+            
             if response.status_code == 200:
-                info = response.json()
-                title = info.get('title', 'Unknown')
+                video_info = response.json()
+                title = video_info.get('title', 'Unknown')
                 logger.info(f"Found video: {title}")
                 
-                # This is a placeholder - you'd need to implement actual download logic
-                # using working YouTube download services or APIs
-                return None, "❌ Web service method not fully implemented"
-            else:
-                return None, "❌ Could not get video info"
+                # Try to use a web-based download service
+                # Example using savefrom.net style approach
+                download_api = "https://www.savefrom.net/mates/en/68/1/youtube"
                 
+                form_data = {
+                    'sf_url': f"https://www.youtube.com/watch?v={video_id}",
+                    'sf_submit': '',
+                    'new': '2'
+                }
+                
+                response = requests.post(download_api, data=form_data, headers=headers, timeout=30)
+                
+                if response.status_code == 200:
+                    # Parse response to find download links
+                    # This is a simplified example - real implementation would need proper parsing
+                    content = response.text
+                    
+                    # Look for download URLs in the response
+                    url_pattern = r'href="([^"]*)" class="link-download"'
+                    download_links = re.findall(url_pattern, content)
+                    
+                    if download_links:
+                        download_url = download_links[0]
+                        
+                        # Download the file
+                        file_response = requests.get(download_url, stream=True, headers=headers, timeout=120)
+                        file_response.raise_for_status()
+                        
+                        filename = f"youtube_{format_type}_{video_id}.{'mp3' if format_type == 'audio' else 'mp4'}"
+                        filepath = os.path.join(temp_dir, filename)
+                        
+                        total_size = 0
+                        with open(filepath, 'wb') as f:
+                            for chunk in file_response.iter_content(chunk_size=8192):
+                                if chunk:
+                                    total_size += len(chunk)
+                                    if total_size > MAX_FILE_SIZE:
+                                        return None, "❌ File too large"
+                                    f.write(chunk)
+                        
+                        # Convert to audio if needed
+                        if format_type == 'audio' and not filename.endswith('.mp3'):
+                            audio_filepath = os.path.join(temp_dir, f"youtube_audio_{video_id}.mp3")
+                            try:
+                                cmd = ['ffmpeg', '-i', filepath, '-vn', '-acodec', 'mp3', '-ab', '192k', audio_filepath, '-y']
+                                result = subprocess.run(cmd, capture_output=True, timeout=60)
+                                if result.returncode == 0 and os.path.exists(audio_filepath):
+                                    os.remove(filepath)
+                                    return audio_filepath, None
+                            except:
+                                pass
+                        
+                        return filepath, None
+            
+            return None, "❌ Web scraping method failed"
+            
         except Exception as e:
-            return None, f"❌ Web service error: {str(e)[:50]}"
+            logger.error(f"Web scraping error: {e}")
+            return None, f"❌ Scraping failed: {str(e)[:50]}"
     
     async def download_youtube(self, url, format_type):
-        """Main YouTube download method - now uses improved version"""
-        return await self.download_youtube_improved(url, format_type)
+        """Main YouTube download method - tries Cobalt API first, then alternatives"""
+        logger.info(f"Downloading YouTube {format_type}: {url}")
+        
+        # Try Cobalt.tools API first
+        filepath, error = await self.download_youtube_cobalt(url, format_type)
+        if filepath:
+            return filepath, error
+        
+        logger.warning(f"Cobalt failed: {error}")
+        
+        # Try alternative API
+        filepath, error = await self.download_youtube_alternative_api(url, format_type)
+        if filepath:
+            return filepath, error
+        
+        logger.warning(f"Alternative API failed: {error}")
+        
+        # Try web scraping as last resort
+        filepath, error = await self.download_youtube_web_scraping(url, format_type)
+        if filepath:
+            return filepath, error
+        
+        # All methods failed
+        return None, "❌ All YouTube download methods failed. Video may be restricted or unavailable."
     
     async def download_instagram_simple(self, url, format_type):
         """Simple Instagram downloader using direct web scraping"""
@@ -536,6 +534,7 @@ if __name__ == '__main__':
                 return None, f"❌ Instagram download failed: {str(e)[:100]}"
     
     async def download_with_ytdlp(self, url, format_type, platform_name):
+        """Use yt-dlp for non-YouTube platforms only"""
         temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
         
         try:
@@ -548,9 +547,11 @@ if __name__ == '__main__':
             if format_type == 'audio':
                 opts.update({
                     'format': 'bestaudio/best',
-                    'extractaudio': True,
-                    'audioformat': 'mp3',
-                    'audioquality': '192',
+                    'postprocessors': [{
+                        'key': 'FFmpegExtractAudio',
+                        'preferredcodec': 'mp3',
+                        'preferredquality': '192',
+                    }]
                 })
             else:
                 opts['format'] = 'best[height<=720]/best'
@@ -702,4 +703,19 @@ async def handle_format_selection(update: Update, context: ContextTypes.DEFAULT_
                 if temp_dir and os.path.exists(temp_dir):
                     shutil.rmtree(temp_dir, ignore_errors=True)
         except:
-            logger.error("Failed to clean up temporary files")
+            pass
+
+def main():
+    logger.info("🤖 Starting Media Downloader Bot...")
+    
+    application = Application.builder().token(BOT_TOKEN).build()
+    
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
+    application.add_handler(CallbackQueryHandler(handle_format_selection))
+    
+    logger.info("🚀 Bot is running!")
+    application.run_polling(drop_pending_updates=True)
+
+if __name__ == '__main__':
+    main()
