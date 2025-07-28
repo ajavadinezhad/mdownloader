@@ -15,7 +15,6 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 import yt_dlp
 import requests
 import instaloader
-import youtube_dl
 
 # Load environment variables
 load_dotenv()
@@ -96,8 +95,8 @@ class MediaDownloaderBot:
         except:
             return "Unknown"
     
-    async def download_youtube_youtube_dl(self, url, format_type):
-        """Use original youtube-dl for YouTube downloads"""
+    async def download_youtube_simple(self, url, format_type):
+        """Simple yt-dlp configuration for YouTube"""
         temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
         
         try:
@@ -110,73 +109,67 @@ class MediaDownloaderBot:
                     clean_url = f"https://www.youtube.com/watch?v={video_id}"
                     logger.info(f"Converted Shorts URL: {clean_url}")
             
-            logger.info(f"Using youtube-dl for: {clean_url}")
+            logger.info(f"Using simple yt-dlp for: {clean_url}")
             
-            # Configure youtube-dl options
+            # Simple yt-dlp configuration
             ydl_opts = {
-                'outtmpl': os.path.join(temp_dir, '%(title)s.%(ext)s'),
+                'outtmpl': os.path.join(temp_dir, '%(id)s.%(ext)s'),  # Use video ID as filename
                 'noplaylist': True,
-                'retries': 5,
-                'fragment_retries': 5,
-                'socket_timeout': 60,
-                'quiet': False,
-                'no_warnings': False,
+                'retries': 3,
+                'socket_timeout': 30,
+                'quiet': True,  # Reduce output
+                'no_warnings': True,
                 'extract_flat': False,
                 'writethumbnail': False,
                 'writeinfojson': False,
-                # Add user agent and headers to avoid blocking
+                # Minimal headers
                 'http_headers': {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36',
                 },
-                # Use specific extractors
+                # Simple extractor settings
                 'extractor_args': {
                     'youtube': {
-                        'skip': ['dash'],  # Skip DASH formats that might cause issues
+                        'player_client': ['android'],  # Use Android client
+                        'skip': ['hls', 'dash'],  # Skip complex formats
                     }
                 }
             }
             
             if format_type == 'audio':
+                # Simple audio extraction
                 ydl_opts.update({
-                    'format': 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best',
+                    'format': 'worstaudio/worst',  # Use worst quality for better success
                     'postprocessors': [{
                         'key': 'FFmpegExtractAudio',
                         'preferredcodec': 'mp3',
-                        'preferredquality': '192',
+                        'preferredquality': '128',  # Lower quality
                     }]
                 })
             else:
-                # For video, try different format selectors
-                ydl_opts['format'] = 'best[height<=720][ext=mp4]/best[height<=720]/best[ext=mp4]/best'
+                # Simple video format
+                ydl_opts['format'] = 'worst[height>=360]/worst'  # Use worst quality for better success
             
-            # Create youtube-dl object
-            with youtube_dl.YoutubeDL(ydl_opts) as ydl:
-                # First, extract info to check file size
-                logger.info("Extracting video info...")
+            # Download with yt-dlp
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                # Extract info first
                 try:
+                    logger.info("Extracting video info...")
                     info = ydl.extract_info(clean_url, download=False)
                     
                     title = info.get('title', 'Unknown')
                     duration = info.get('duration', 0)
-                    filesize = info.get('filesize') or info.get('filesize_approx', 0)
                     
-                    logger.info(f"Video title: {title}")
-                    logger.info(f"Duration: {duration} seconds")
+                    logger.info(f"Video: {title} ({duration}s)")
                     
-                    # Check file size
-                    if filesize and filesize > MAX_FILE_SIZE:
-                        size_mb = filesize // (1024 * 1024)
-                        max_mb = MAX_FILE_SIZE // (1024 * 1024)
-                        return None, f"❌ File too large ({size_mb}MB). Limit: {max_mb}MB"
-                    
-                    if filesize:
-                        logger.info(f"Estimated file size: {filesize // (1024 * 1024)}MB")
+                    # Check if it's too long (optional)
+                    if duration and duration > 3600:  # 1 hour
+                        return None, "❌ Video too long (>1 hour)"
                 
                 except Exception as info_error:
-                    logger.warning(f"Could not extract info: {info_error}")
-                    # Continue with download anyway
+                    logger.warning(f"Info extraction failed: {info_error}")
+                    # Continue anyway
                 
-                # Download the video
+                # Download
                 logger.info("Starting download...")
                 ydl.download([clean_url])
                 
@@ -186,56 +179,47 @@ class MediaDownloaderBot:
                 if files:
                     filepath = os.path.join(temp_dir, files[0])
                     
-                    # Double-check file size after download
-                    actual_size = os.path.getsize(filepath)
-                    if actual_size > MAX_FILE_SIZE:
-                        size_mb = actual_size // (1024 * 1024)
+                    # Check file size
+                    file_size = os.path.getsize(filepath)
+                    if file_size > MAX_FILE_SIZE:
+                        size_mb = file_size // (1024 * 1024)
                         max_mb = MAX_FILE_SIZE // (1024 * 1024)
-                        return None, f"❌ Downloaded file too large ({size_mb}MB). Limit: {max_mb}MB"
+                        return None, f"❌ File too large ({size_mb}MB). Limit: {max_mb}MB"
                     
-                    logger.info(f"Download successful: {filepath} ({actual_size // (1024*1024)}MB)")
+                    logger.info(f"Download successful: {file_size // (1024*1024)}MB")
                     return filepath, None
                 else:
-                    return None, "❌ Download completed but no file found"
+                    return None, "❌ No file downloaded"
                     
-        except youtube_dl.DownloadError as e:
-            logger.error(f"youtube-dl download error: {e}")
+        except yt_dlp.DownloadError as e:
+            logger.error(f"yt-dlp download error: {e}")
             error_str = str(e).lower()
             
-            if 'http error 403' in error_str:
-                return None, "❌ Access forbidden. Video may be region-blocked or private."
-            elif 'http error 404' in error_str:
-                return None, "❌ Video not found or has been deleted."
-            elif 'http error 429' in error_str:
-                return None, "❌ Too many requests. Try again later."
-            elif 'private video' in error_str:
-                return None, "❌ This is a private video."
+            if 'private video' in error_str:
+                return None, "❌ Private video"
             elif 'video unavailable' in error_str:
-                return None, "❌ Video unavailable or region-blocked."
-            elif 'age-restricted' in error_str:
-                return None, "❌ Age-restricted video cannot be downloaded."
-            elif 'live stream' in error_str:
-                return None, "❌ Live streams are not supported."
+                return None, "❌ Video unavailable"
+            elif 'age restricted' in error_str:
+                return None, "❌ Age-restricted video"
+            elif 'premieres in' in error_str:
+                return None, "❌ Video hasn't premiered yet"
+            elif 'live event' in error_str:
+                return None, "❌ Live streams not supported"
+            elif '403' in error_str:
+                return None, "❌ Access forbidden (region/country block)"
+            elif '404' in error_str:
+                return None, "❌ Video not found"
             else:
-                return None, f"❌ Download error: {str(e)[:100]}"
+                return None, f"❌ Download failed: {str(e)[:100]}"
                 
         except Exception as e:
-            logger.error(f"youtube-dl error: {e}")
-            error_str = str(e).lower()
-            
-            if 'signature' in error_str or 'cipher' in error_str:
-                return None, "❌ YouTube signature issue. youtube-dl may need an update."
-            elif 'regex' in error_str or 'extract' in error_str:
-                return None, "❌ YouTube changed their system. youtube-dl needs an update."
-            elif 'network' in error_str or 'connection' in error_str:
-                return None, "❌ Network error. Check your internet connection."
-            else:
-                return None, f"❌ Error: {str(e)[:100]}"
+            logger.error(f"yt-dlp error: {e}")
+            return None, f"❌ Error: {str(e)[:100]}"
     
     async def download_youtube(self, url, format_type):
-        """Main YouTube download method using youtube-dl"""
+        """Main YouTube download method"""
         logger.info(f"Downloading YouTube {format_type}: {url}")
-        return await self.download_youtube_youtube_dl(url, format_type)
+        return await self.download_youtube_simple(url, format_type)
     
     async def download_instagram_simple(self, url, format_type):
         """Simple Instagram downloader using direct web scraping"""
@@ -416,7 +400,7 @@ class MediaDownloaderBot:
                 return None, f"❌ Instagram download failed: {str(e)[:100]}"
     
     async def download_with_ytdlp(self, url, format_type, platform_name):
-        """Use yt-dlp for non-YouTube platforms only"""
+        """Use yt-dlp for non-YouTube platforms"""
         temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
         
         try:
