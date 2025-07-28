@@ -5,6 +5,7 @@ import tempfile
 import shutil
 import subprocess
 import re
+import json
 from urllib.parse import urlparse
 from dotenv import load_dotenv
 
@@ -14,6 +15,7 @@ import yt_dlp
 import requests
 import instaloader
 from pytubefix import YouTube
+from pytubefix.cli import on_progress
 from pytubefix.exceptions import VideoUnavailable, AgeRestrictedError, VideoPrivate, MembersOnly
 
 # Load environment variables
@@ -40,11 +42,11 @@ os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 class MediaDownloaderBot:
     def __init__(self):
         self.supported_platforms = {
-           #'youtube.com': 'YouTube',
-           #'youtu.be': 'YouTube',
+            'youtube.com': 'YouTube',
+            'youtu.be': 'YouTube',
             'twitter.com': 'Twitter/X',
             'x.com': 'Twitter/X',
-           #'instagram.com': 'Instagram',
+            'instagram.com': 'Instagram',
             'soundcloud.com': 'SoundCloud',
         }
         self.url_cache = {}
@@ -108,23 +110,24 @@ class MediaDownloaderBot:
                     video_id = video_id_match.group(1)
                     clean_url = f"https://www.youtube.com/watch?v={video_id}"
             
-            # Use PyTubeFix
-            yt = YouTube(clean_url, use_oauth=False, allow_oauth_cache=False)
+            # Use PyTubeFix with progress callback
+            yt = YouTube(clean_url, on_progress_callback=on_progress, use_oauth=False, allow_oauth_cache=False)
             title = yt.title
             
             if format_type == 'audio':
-                # Get best audio stream
-                stream = yt.streams.filter(only_audio=True, file_extension='mp4').order_by('abr').desc().first()
+                # Get audio-only stream
+                stream = yt.streams.get_audio_only()
                 if not stream:
+                    # Fallback to any audio stream
                     stream = yt.streams.filter(only_audio=True).first()
                 if not stream:
                     return None, "❌ No audio stream available"
             else:
-                # Get best video stream
-                stream = (yt.streams.filter(progressive=True, file_extension='mp4', res='720p').first() or
-                         yt.streams.filter(progressive=True, file_extension='mp4', res='480p').first() or
-                         yt.streams.filter(progressive=True, file_extension='mp4', res='360p').first() or
-                         yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first())
+                # Get highest resolution video
+                stream = yt.streams.get_highest_resolution()
+                if not stream:
+                    # Fallback to any progressive stream
+                    stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
                 if not stream:
                     return None, "❌ No video stream available"
             
@@ -134,14 +137,15 @@ class MediaDownloaderBot:
                 max_mb = MAX_FILE_SIZE // (1024 * 1024)
                 return None, f"❌ File too large ({size_mb}MB). Limit: {max_mb}MB"
             
-            # Download
+            # Download with pytubefix
             safe_title = re.sub(r'[^\w\s-]', '', title)[:50]
-            filename = f"{safe_title}_{format_type}.mp4"
-            filepath = os.path.join(temp_dir, filename)
-            stream.download(output_path=temp_dir, filename=filename)
+            filename = f"{safe_title}_{format_type}"
+            
+            # Download to temp directory
+            filepath = stream.download(output_path=temp_dir, filename=filename)
             
             # Convert to MP3 if audio and ffmpeg available
-            if format_type == 'audio':
+            if format_type == 'audio' and not filepath.endswith('.mp3'):
                 mp3_filepath = os.path.join(temp_dir, f"{safe_title}_audio.mp3")
                 try:
                     cmd = ['ffmpeg', '-i', filepath, '-vn', '-acodec', 'mp3', '-ab', '192k', mp3_filepath, '-y']
@@ -150,7 +154,7 @@ class MediaDownloaderBot:
                         os.remove(filepath)
                         filepath = mp3_filepath
                 except:
-                    pass  # Use MP4 if conversion fails
+                    pass  # Use original format if conversion fails
             
             return filepath, None
             
@@ -164,19 +168,127 @@ class MediaDownloaderBot:
             return None, "❌ Members-only content"
         except Exception as e:
             logger.error(f"YouTube error: {e}")
-            return None, f"❌ YouTube download failed: {str(e)[:100]}"
+            if 'regex' in str(e).lower() or 'extract' in str(e).lower():
+                return None, "❌ YouTube updated their system. PyTubeFix needs an update."
+            else:
+                return None, f"❌ YouTube download failed: {str(e)[:100]}"
     
-    async def download_instagram(self, url, format_type):
+    async def download_instagram_simple(self, url, format_type):
+        """Simple Instagram downloader using direct web scraping"""
         temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
         
         try:
             # Extract shortcode from URL
-            shortcode_match = re.search(r'/p/([A-Za-z0-9_-]+)', url) or re.search(r'/reel/([A-Za-z0-9_-]+)', url)
+            shortcode_match = re.search(r'/(?:p|reel)/([A-Za-z0-9_-]+)', url)
             if not shortcode_match:
                 return None, "❌ Invalid Instagram URL"
             
             shortcode = shortcode_match.group(1)
+            
+            # Try direct web scraping approach
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+            }
+            
+            # Get the Instagram page
+            page_url = f"https://www.instagram.com/p/{shortcode}/"
+            response = requests.get(page_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            
+            # Extract JSON data from page
+            html_content = response.text
+            
+            # Look for video/image URLs in the HTML
+            video_pattern = r'"video_url":"([^"]+)"'
+            image_pattern = r'"display_url":"([^"]+)"'
+            
+            video_match = re.search(video_pattern, html_content)
+            image_match = re.search(image_pattern, html_content)
+            
+            if video_match:
+                # It's a video
+                video_url = video_match.group(1).replace('\\u0026', '&')
+                
+                # Download video
+                video_response = requests.get(video_url, headers=headers, stream=True)
+                video_response.raise_for_status()
+                
+                filename = f"instagram_video_{shortcode}.mp4"
+                filepath = os.path.join(temp_dir, filename)
+                
+                with open(filepath, 'wb') as f:
+                    for chunk in video_response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                
+                # Check file size
+                if os.path.getsize(filepath) > MAX_FILE_SIZE:
+                    return None, f"❌ File too large. Limit: {MAX_FILE_SIZE // (1024*1024)}MB"
+                
+                # Convert to audio if requested
+                if format_type == 'audio':
+                    audio_filepath = os.path.join(temp_dir, f"instagram_audio_{shortcode}.mp3")
+                    try:
+                        cmd = ['ffmpeg', '-i', filepath, '-vn', '-acodec', 'mp3', '-ab', '192k', audio_filepath, '-y']
+                        result = subprocess.run(cmd, capture_output=True, timeout=60)
+                        if result.returncode == 0 and os.path.exists(audio_filepath):
+                            os.remove(filepath)
+                            return audio_filepath, None
+                        else:
+                            return None, "❌ Audio extraction failed"
+                    except:
+                        return None, "❌ Audio extraction failed"
+                
+                return filepath, None
+                
+            elif image_match:
+                # It's an image
+                if format_type == 'audio':
+                    return None, "❌ This post contains only images"
+                
+                image_url = image_match.group(1).replace('\\u0026', '&')
+                
+                # Download image
+                image_response = requests.get(image_url, headers=headers, stream=True)
+                image_response.raise_for_status()
+                
+                filename = f"instagram_image_{shortcode}.jpg"
+                filepath = os.path.join(temp_dir, filename)
+                
+                with open(filepath, 'wb') as f:
+                    for chunk in image_response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                
+                if os.path.getsize(filepath) > MAX_FILE_SIZE:
+                    return None, f"❌ File too large. Limit: {MAX_FILE_SIZE // (1024*1024)}MB"
+                
+                return filepath, None
+            else:
+                return None, "❌ Could not find media in Instagram post"
+                
+        except requests.exceptions.RequestException as e:
+            return None, "❌ Network error accessing Instagram"
+        except Exception as e:
+            logger.error(f"Instagram simple scraper error: {e}")
+            return None, f"❌ Instagram download failed: {str(e)[:100]}"
+    
+    async def download_instagram(self, url, format_type):
+        """Try Instaloader first, then fallback to simple scraper"""
+        try:
+            # First try Instaloader
+            shortcode_match = re.search(r'/(?:p|reel)/([A-Za-z0-9_-]+)', url)
+            if not shortcode_match:
+                return None, "❌ Invalid Instagram URL"
+            
+            shortcode = shortcode_match.group(1)
+            
+            # Quick test to avoid rate limiting
             post = instaloader.Post.from_shortcode(self.insta_loader.context, shortcode)
+            
+            temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
             
             if post.is_video:
                 # Download video
@@ -230,11 +342,12 @@ class MediaDownloaderBot:
                 return filepath, None
                 
         except Exception as e:
-            logger.error(f"Instagram error: {e}")
-            if 'private' in str(e).lower():
-                return None, "❌ Private account or post"
-            elif '401' in str(e) or 'rate limit' in str(e).lower():
-                return None, "❌ Instagram is rate limiting. Please wait a few minutes and try again."
+            logger.warning(f"Instaloader failed: {e}")
+            
+            # If Instaloader fails (rate limit, etc), try simple scraper
+            if '401' in str(e) or 'rate limit' in str(e).lower() or 'unauthorized' in str(e).lower():
+                logger.info("Trying Instagram simple scraper fallback...")
+                return await self.download_instagram_simple(url, format_type)
             else:
                 return None, f"❌ Instagram download failed: {str(e)[:100]}"
     
