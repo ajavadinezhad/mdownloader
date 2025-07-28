@@ -113,24 +113,30 @@ class MediaDownloaderBot:
             
             # Try multiple approaches for better success rate
             try:
-                # First attempt with minimal options
-                yt = YouTube(clean_url)
+                # First attempt with po_token for bot detection bypass
+                yt = YouTube(clean_url, use_po_token=True)
                 logger.info(f"YouTube object created successfully for: {yt.title}")
             except Exception as e1:
-                logger.warning(f"First attempt failed: {e1}")
+                logger.warning(f"First attempt with po_token failed: {e1}")
                 try:
-                    # Second attempt with different options
-                    yt = YouTube(url)  # Try original URL
-                    logger.info(f"Second attempt succeeded for: {yt.title}")
+                    # Second attempt with client override
+                    yt = YouTube(clean_url, client='WEB')
+                    logger.info(f"Second attempt with WEB client succeeded for: {yt.title}")
                 except Exception as e2:
                     logger.warning(f"Second attempt failed: {e2}")
-                    # Third attempt with age bypass
                     try:
-                        yt = YouTube(clean_url, use_oauth=False, allow_oauth_cache=False)
+                        # Third attempt with original URL and po_token
+                        yt = YouTube(url, use_po_token=True)
                         logger.info(f"Third attempt succeeded for: {yt.title}")
                     except Exception as e3:
-                        logger.error(f"All attempts failed. Last error: {e3}")
-                        raise e3
+                        logger.warning(f"Third attempt failed: {e3}")
+                        try:
+                            # Fourth attempt - minimal options
+                            yt = YouTube(clean_url)
+                            logger.info(f"Fourth attempt succeeded for: {yt.title}")
+                        except Exception as e4:
+                            logger.error(f"All attempts failed. Last error: {e4}")
+                            raise e4
             
             title = yt.title
             logger.info(f"Video title: {title}")
