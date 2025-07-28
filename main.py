@@ -507,7 +507,6 @@ Send me a URL and choose format.
 
 ⚠️ <b>Limit:</b> {MAX_FILE_SIZE // (1024*1024)}MB max file size.
 
-ℹ️ <b>Note:</b> For YouTube, the bot uses browser cookies to bypass restrictions. Make sure Chrome or Firefox is installed.
     """
     await update.message.reply_text(welcome_text, parse_mode='HTML')
 
