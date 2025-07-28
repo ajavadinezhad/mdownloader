@@ -108,68 +108,69 @@ class MediaDownloaderBot:
                     video_id = video_id_match.group(1)
                     clean_url = f"https://www.youtube.com/watch?v={video_id}"
             
-            # Try PyTubeFix first
-            try:
-                yt = YouTube(clean_url, use_oauth=False, allow_oauth_cache=False)
-                title = yt.title
-                
-                if format_type == 'audio':
-                    stream = yt.streams.filter(only_audio=True, file_extension='mp4').order_by('abr').desc().first()
-                    if not stream:
-                        stream = yt.streams.filter(only_audio=True).first()
-                    if not stream:
-                        raise Exception("No audio stream available")
-                else:
-                    stream = (yt.streams.filter(progressive=True, file_extension='mp4', res='720p').first() or
-                             yt.streams.filter(progressive=True, file_extension='mp4', res='480p').first() or
-                             yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first())
-                    if not stream:
-                        raise Exception("No video stream available")
-                
-                # Check file size
-                if stream.filesize and stream.filesize > MAX_FILE_SIZE:
-                    size_mb = stream.filesize // (1024 * 1024)
-                    max_mb = MAX_FILE_SIZE // (1024 * 1024)
-                    return None, f"❌ File too large ({size_mb}MB). Limit: {max_mb}MB"
-                
-                # Download
-                safe_title = re.sub(r'[^\w\s-]', '', title)[:50]
-                filename = f"{safe_title}_{format_type}.mp4"
-                filepath = os.path.join(temp_dir, filename)
-                stream.download(output_path=temp_dir, filename=filename)
-                
-                # Convert to MP3 if audio and ffmpeg available
-                if format_type == 'audio':
-                    mp3_filepath = os.path.join(temp_dir, f"{safe_title}_audio.mp3")
-                    try:
-                        cmd = ['ffmpeg', '-i', filepath, '-vn', '-acodec', 'mp3', '-ab', '192k', mp3_filepath, '-y']
-                        result = subprocess.run(cmd, capture_output=True, timeout=60)
-                        if result.returncode == 0 and os.path.exists(mp3_filepath):
-                            os.remove(filepath)
-                            filepath = mp3_filepath
-                    except:
-                        pass  # Use MP4 if conversion fails
-                
-                return filepath, None
-                
-            except Exception as e:
-                # Fallback to yt-dlp
-                logger.warning(f"PyTubeFix failed, trying yt-dlp: {e}")
-                return await self.download_with_ytdlp(url, format_type, "YouTube")
-                
-        except Exception as e:
-            logger.error(f"YouTube download error: {e}")
-            if 'unavailable' in str(e).lower():
-                return None, "❌ Video unavailable or private"
-            elif 'age' in str(e).lower():
-                return None, "❌ Age-restricted content"
+            # Use PyTubeFix
+            yt = YouTube(clean_url, use_oauth=False, allow_oauth_cache=False)
+            title = yt.title
+            
+            if format_type == 'audio':
+                # Get best audio stream
+                stream = yt.streams.filter(only_audio=True, file_extension='mp4').order_by('abr').desc().first()
+                if not stream:
+                    stream = yt.streams.filter(only_audio=True).first()
+                if not stream:
+                    return None, "❌ No audio stream available"
             else:
-                return None, f"❌ Download failed: {str(e)[:100]}"
+                # Get best video stream
+                stream = (yt.streams.filter(progressive=True, file_extension='mp4', res='720p').first() or
+                         yt.streams.filter(progressive=True, file_extension='mp4', res='480p').first() or
+                         yt.streams.filter(progressive=True, file_extension='mp4', res='360p').first() or
+                         yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first())
+                if not stream:
+                    return None, "❌ No video stream available"
+            
+            # Check file size
+            if stream.filesize and stream.filesize > MAX_FILE_SIZE:
+                size_mb = stream.filesize // (1024 * 1024)
+                max_mb = MAX_FILE_SIZE // (1024 * 1024)
+                return None, f"❌ File too large ({size_mb}MB). Limit: {max_mb}MB"
+            
+            # Download
+            safe_title = re.sub(r'[^\w\s-]', '', title)[:50]
+            filename = f"{safe_title}_{format_type}.mp4"
+            filepath = os.path.join(temp_dir, filename)
+            stream.download(output_path=temp_dir, filename=filename)
+            
+            # Convert to MP3 if audio and ffmpeg available
+            if format_type == 'audio':
+                mp3_filepath = os.path.join(temp_dir, f"{safe_title}_audio.mp3")
+                try:
+                    cmd = ['ffmpeg', '-i', filepath, '-vn', '-acodec', 'mp3', '-ab', '192k', mp3_filepath, '-y']
+                    result = subprocess.run(cmd, capture_output=True, timeout=60)
+                    if result.returncode == 0 and os.path.exists(mp3_filepath):
+                        os.remove(filepath)
+                        filepath = mp3_filepath
+                except:
+                    pass  # Use MP4 if conversion fails
+            
+            return filepath, None
+            
+        except VideoUnavailable:
+            return None, "❌ Video unavailable or private"
+        except AgeRestrictedError:
+            return None, "❌ Age-restricted content"
+        except VideoPrivate:
+            return None, "❌ Private video"
+        except MembersOnly:
+            return None, "❌ Members-only content"
+        except Exception as e:
+            logger.error(f"YouTube error: {e}")
+            return None, f"❌ YouTube download failed: {str(e)[:100]}"
     
     async def download_instagram(self, url, format_type):
         temp_dir = tempfile.mkdtemp(dir=DOWNLOAD_DIR)
         
         try:
+            # Extract shortcode from URL
             shortcode_match = re.search(r'/p/([A-Za-z0-9_-]+)', url) or re.search(r'/reel/([A-Za-z0-9_-]+)', url)
             if not shortcode_match:
                 return None, "❌ Invalid Instagram URL"
@@ -283,14 +284,12 @@ class MediaDownloaderBot:
                 return None, f"❌ Download failed: {str(e)[:100]}"
     
     async def download_media(self, url, format_type='best'):
-        platform_name = self.get_platform_name(url)
-        
         if any(platform in url.lower() for platform in ['youtube.com', 'youtu.be']):
             return await self.download_youtube(url, format_type)
         elif 'instagram.com' in url.lower():
             return await self.download_instagram(url, format_type)
         else:
-            return await self.download_with_ytdlp(url, format_type, platform_name)
+            return await self.download_with_ytdlp(url, format_type, self.get_platform_name(url))
 
 # Initialize bot
 bot = MediaDownloaderBot()
@@ -324,6 +323,7 @@ async def handle_url(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = urls[0]
     
     if not bot.is_supported_url(url):
+        await update.message.reply_text("❌ Platform not supported. Supported: YouTube, Twitter/X, Instagram, SoundCloud")
         return
     
     platform = bot.get_platform_name(url)
