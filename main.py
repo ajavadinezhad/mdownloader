@@ -157,10 +157,16 @@ class MediaDownloaderBot:
             # Create YouTube object with better error handling
             try:
                 yt = YouTube(clean_url, use_oauth=False, allow_oauth_cache=False)
+                logger.info(f"✅ PyTubeFix object created successfully")
             except Exception as e:
-                logger.warning(f"First attempt failed: {e}")
+                logger.warning(f"First attempt with clean URL failed: {e}")
                 # Try with original URL
-                yt = YouTube(url, use_oauth=False, allow_oauth_cache=False)
+                try:
+                    yt = YouTube(url, use_oauth=False, allow_oauth_cache=False)
+                    logger.info(f"✅ PyTubeFix object created with original URL")
+                except Exception as e2:
+                    logger.error(f"Both URL attempts failed: {e2}")
+                    raise e2
             
             # Get video info
             title = yt.title
@@ -550,11 +556,20 @@ class MediaDownloaderBot:
             logger.info(f"🎬 {platform_name} detected - using PyTubeFix")
             filepath, error = await self.download_youtube_with_pytubefix(url, format_type)
             
-            # If PyTubeFix fails, try yt-dlp as fallback
-            if error and ("changed their system" in error or "cipher" in error or "extract" in error):
+            # If PyTubeFix fails, try yt-dlp as fallback for various error types
+            if error and any(keyword in error.lower() for keyword in [
+                "changed their system", "cipher", "extract", "unavailable", 
+                "private", "deleted", "regex", "not found"
+            ]):
                 logger.warning(f"PyTubeFix failed: {error}")
                 logger.info(f"🔄 Trying yt-dlp fallback for {platform_name}")
-                return await self.download_youtube_with_ytdlp_fallback(url, format_type)
+                fallback_result = await self.download_youtube_with_ytdlp_fallback(url, format_type)
+                
+                # If fallback also fails, return original PyTubeFix error with fallback info
+                if fallback_result[1]:  # fallback_result is (filepath, error)
+                    return None, f"{error}\n\n🔄 Fallback also failed: {fallback_result[1]}"
+                else:
+                    return fallback_result
             
             return filepath, error
         
@@ -900,6 +915,23 @@ async def handle_format_selection(update: Update, context: ContextTypes.DEFAULT_
             logger.warning(f"⚠️ Cleanup failed: {e}")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Test the bot with known working YouTube videos"""
+    test_videos = [
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",  # Rick Roll - usually works
+        "https://www.youtube.com/watch?v=9bZkp7q19f0",  # PSY - Gangnam Style
+        "https://youtu.be/kJQP7kiw5Fk"  # Luis Fonsi - Despacito
+    ]
+    
+    test_text = "🧪 <b>Testing YouTube Downloads</b>\n\n"
+    test_text += "Here are some test videos you can try:\n\n"
+    
+    for i, video_url in enumerate(test_videos, 1):
+        test_text += f"{i}. <code>{video_url}</code>\n"
+    
+    test_text += "\n💡 Copy and send any of these URLs to test the bot!"
+    test_text += "\n\n🔍 If these don't work, there might be a regional or network issue."
+    
+    await update.message.reply_text(test_text, parse_mode='HTML')
     """Send a message when the command /help is issued."""
     max_size_mb = MAX_FILE_SIZE // (1024*1024)
     help_text = f"""
@@ -993,6 +1025,7 @@ def main():
     # Add handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("test", test_command))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_url))
     application.add_handler(CallbackQueryHandler(handle_format_selection))
     
