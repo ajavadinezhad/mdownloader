@@ -57,9 +57,6 @@ class MediaBot:
             'twitter': {
                 'format': 'best',
             },
-            'instagram': {
-                'format': 'best',
-            }
         }
     
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
