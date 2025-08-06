@@ -91,7 +91,6 @@ Send me URLs from:
         # Validate URL
         platform = self._detect_platform(url)
         if not platform:
-            await update.message.reply_text("❌ Unsupported URL")
             return
         
         msg = await update.message.reply_text(f"⏳ Downloading from {platform}...")
