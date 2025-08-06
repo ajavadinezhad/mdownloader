@@ -56,6 +56,9 @@ class MediaBot:
             },
             'twitter': {
                 'format': 'best',
+            },
+            'instagram': {
+                'format': 'best',
             }
         }
     
@@ -78,7 +81,7 @@ Send me URLs from:
         text = update.message.text.strip()
         
         # Check if message contains a URL
-        if not any(x in text for x in ['http://', 'https://', 'www.', 'youtu.be', 'youtube.com', 'soundcloud.com', 'x.com']):
+        if not any(x in text for x in ['http://', 'https://', 'www.', 'youtu.be', 'youtube.com', 'soundcloud.com', 'x.com', 'twitter.com', 'instagram.com']):
             # Not a URL, ignore the message
             return
         
@@ -141,9 +144,14 @@ Send me URLs from:
     
     def _download_sync(self, url, ydl_opts, platform):
         try:
-            # Add additional options for server environments
+            # For YouTube, try multiple methods
             if platform == 'youtube':
-                # Try multiple methods in order
+                # Extract video ID
+                import re
+                video_id_match = re.search(r'(?:v=|/)([0-9A-Za-z_-]{11})', url)
+                video_id = video_id_match.group(1) if video_id_match else None
+                
+                # Method 1: Try with cookies and proxy if available
                 proxy = os.getenv('HTTP_PROXY') or os.getenv('SOCKS_PROXY')
                 
                 if proxy:
@@ -155,18 +163,60 @@ Send me URLs from:
                 
                 ydl_opts.update({
                     'format': 'best[height<=720]/best',
-                    'quiet': True,
-                    'no_warnings': True,
+                    'quiet': False,  # Show errors for debugging
+                    'no_warnings': False,
                     'extract_flat': False,
                     'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                     'referer': 'https://www.youtube.com/',
-                    'sleep_interval': 1,
-                    'max_sleep_interval': 3,
+                    'sleep_interval': 2,
+                    'max_sleep_interval': 5,
+                    'extractor_retries': 3,
                     'nocheckcertificate': True,
                     'geo_bypass': True,
+                    'verbose': True,  # More debug info
                 })
+                
+                # Try primary YouTube download
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        info = ydl.extract_info(url, download=False)
+                        if info:
+                            logger.info("YouTube direct download working")
+                            return self._process_download(ydl, url, info, platform)
+                except Exception as e:
+                    logger.warning(f"YouTube direct failed: {str(e)[:100]}")
+                
+                # Method 2: Try Invidious instances
+                if video_id:
+                    logger.info("Trying Invidious instances...")
+                    invidious_result = self._try_invidious(video_id, ydl_opts)
+                    if invidious_result and invidious_result['success']:
+                        return invidious_result
+                
+                # Method 3: Try Piped API
+                if video_id:
+                    logger.info("Trying Piped instances...")
+                    piped_result = self._try_piped(video_id, ydl_opts)
+                    if piped_result and piped_result['success']:
+                        return piped_result
+                
+                # Method 4: Try cobalt.tools API
+                if video_id:
+                    logger.info("Trying Cobalt API...")
+                    cobalt_result = self._try_cobalt(url, ydl_opts)
+                    if cobalt_result and cobalt_result['success']:
+                        return cobalt_result
+                
+                # All methods failed
+                return {
+                    'success': False,
+                    'error': 'All download methods failed. Try again later or use a different video.'
+                }
             
+            # For non-YouTube platforms, use standard method
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                return self._process_download(ydl, url, info, platform)
                 # Extract info
                 info = ydl.extract_info(url, download=False)
                 if not info:
@@ -287,6 +337,7 @@ Send me URLs from:
                 'youtube': ['youtube.com', 'youtu.be', 'm.youtube'],
                 'soundcloud': ['soundcloud.com'],
                 'twitter': ['twitter.com', 'x.com', 't.co'],
+                'instagram': ['instagram.com', 'instagr.am']
             }
             
             for platform, domains in platforms.items():
