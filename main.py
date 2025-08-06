@@ -127,6 +127,16 @@ Send me URLs from:
         try:
             # Add additional options for server environments
             if platform == 'youtube':
+                # Try multiple methods in order
+                proxy = os.getenv('HTTP_PROXY') or os.getenv('SOCKS_PROXY')
+                
+                if proxy:
+                    ydl_opts['proxy'] = proxy
+                    logger.info(f"Using proxy: {proxy}")
+                elif os.path.exists('cookies.txt'):
+                    ydl_opts['cookiefile'] = 'cookies.txt'
+                    logger.info("Using cookies.txt for YouTube")
+                
                 ydl_opts.update({
                     'format': 'best[height<=720]/best',
                     'quiet': True,
@@ -134,12 +144,10 @@ Send me URLs from:
                     'extract_flat': False,
                     'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                     'referer': 'https://www.youtube.com/',
-                    'add_header': ['Accept-Language:en-US,en;q=0.9', 'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'],
                     'sleep_interval': 1,
                     'max_sleep_interval': 3,
                     'nocheckcertificate': True,
                     'geo_bypass': True,
-                    'geo_bypass_country': 'US',
                 })
             
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
