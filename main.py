@@ -56,7 +56,7 @@ class MediaBot:
             },
             'twitter': {
                 'format': 'best',
-            },
+            }
         }
     
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -78,7 +78,7 @@ Send me URLs from:
         text = update.message.text.strip()
         
         # Check if message contains a URL
-        if not any(x in text for x in ['http://', 'https://', 'www.', 'youtu.be', 'youtube.com', 'soundcloud.com', 'x.com', 'twitter.com', 'instagram.com']):
+        if not any(x in text for x in ['http://', 'https://', 'www.', 'youtu.be', 'youtube.com', 'soundcloud.com', 'x.com']):
             # Not a URL, ignore the message
             return
         
@@ -287,7 +287,6 @@ Send me URLs from:
                 'youtube': ['youtube.com', 'youtu.be', 'm.youtube'],
                 'soundcloud': ['soundcloud.com'],
                 'twitter': ['twitter.com', 'x.com', 't.co'],
-                'instagram': ['instagram.com', 'instagr.am']
             }
             
             for platform, domains in platforms.items():
