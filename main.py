@@ -8,6 +8,10 @@ from urllib.parse import urlparse
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 import yt_dlp
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -32,8 +36,10 @@ class RateLimiter:
         return True
 
 class MediaBot:
-    def __init__(self, token):
-        self.token = token
+    def __init__(self):
+        self.token = os.getenv('TELEGRAM_TOKEN')
+        if not self.token:
+            raise ValueError("TELEGRAM_TOKEN not found in .env file")
         self.temp_dir = tempfile.mkdtemp()
         self.rate_limiter = RateLimiter(per_minute=5)
         
@@ -119,6 +125,23 @@ Send me URLs from:
     
     def _download_sync(self, url, ydl_opts, platform):
         try:
+            # Add additional options for server environments
+            if platform == 'youtube':
+                ydl_opts.update({
+                    'format': 'best[height<=720]/best',
+                    'quiet': True,
+                    'no_warnings': True,
+                    'extract_flat': False,
+                    'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'referer': 'https://www.youtube.com/',
+                    'add_header': ['Accept-Language:en-US,en;q=0.9', 'Accept:text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'],
+                    'sleep_interval': 1,
+                    'max_sleep_interval': 3,
+                    'nocheckcertificate': True,
+                    'geo_bypass': True,
+                    'geo_bypass_country': 'US',
+                })
+            
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 # Extract info
                 info = ydl.extract_info(url, download=False)
@@ -271,6 +294,5 @@ Send me URLs from:
         app.run_polling()
 
 if __name__ == '__main__':
-    TOKEN = os.getenv('TELEGRAM_TOKEN', 'YOUR_BOT_TOKEN_HERE')
-    bot = MediaBot(TOKEN)
+    bot = MediaBot()
     bot.run()
