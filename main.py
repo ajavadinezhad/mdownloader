@@ -78,7 +78,23 @@ Send me URLs from:
     
     async def download_media(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id = update.effective_user.id
-        url = update.message.text.strip()
+        text = update.message.text.strip()
+        
+        # Check if message contains a URL
+        if not any(x in text for x in ['http://', 'https://', 'www.', 'youtu.be', 'youtube.com', 'soundcloud.com', 'x.com', 'twitter.com', 'instagram.com']):
+            # Not a URL, ignore the message
+            return
+        
+        # Extract URL from message (might contain other text)
+        import re
+        url_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+        urls = re.findall(url_pattern, text)
+        
+        if not urls:
+            # No valid URL found, ignore
+            return
+            
+        url = urls[0]  # Process first URL found
         
         # Rate limiting
         if not self.rate_limiter.check(user_id):
@@ -91,6 +107,10 @@ Send me URLs from:
         # Validate URL
         platform = self._detect_platform(url)
         if not platform:
+            # In groups, don't respond to unsupported URLs
+            if update.message.chat.type != 'private':
+                return
+            await update.message.reply_text("❌ Unsupported URL")
             return
         
         msg = await update.message.reply_text(f"⏳ Downloading from {platform}...")
